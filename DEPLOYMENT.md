@@ -11,23 +11,61 @@ offline-triage-node/
 │   ├── 01-databases.sql        # creates triage + nocodb_meta (first boot only)
 │   └── 02-triage-schema.sql    # requests table, indexes, active_queue view
 ├── nginx/
-│   └── default.conf            # static portal + /api/sos reverse proxy
+│   └── default.conf            # static portal, /api/sos proxy, rate limits
 ├── html/
 │   └── index.html              # the SOS form
-└── n8n/
-    ├── workflows/
-    │   └── sos-intake-triage.json
-    └── credentials/            # triage-postgres.json, generated, gitignored
+├── n8n/
+│   ├── workflows/
+│   │   └── sos-intake-triage.json   # the pipeline; DEFAULT_MODEL lives here
+│   └── credentials/            # triage-postgres.json, generated, gitignored
+├── eval/                       # triage regression suite; see eval/README.md
+│   ├── golden-set.jsonl
+│   ├── run-eval.mjs
+│   └── run-eval.sh
+├── scripts/
+│   └── make-offline-bundle.sh  # stage everything for an air-gapped install
+└── offline-bundle/             # produced by that script, gitignored
 ```
 
-## 2. Prerequisites
+## 2. Installing With No Internet
+
+`install.sh` normally pulls five images and a multi-GB model. During the blackout this node exists for, that is impossible — so the bundle has to be staged in advance, on a machine that has a connection:
+
+```bash
+./scripts/make-offline-bundle.sh
+```
+
+That produces `offline-bundle/` containing every pinned image in one archive, the model's Ollama data directory, and a manifest of digests and sizes. Copy the **whole repository, including `offline-bundle/`**, onto removable media. On the target machine, `./install.sh` finds it, `docker load`s the images, restores the model, and never touches the network.
+
+Measured size, with `llama3.1` 8B:
+
+| | uncompressed |
+| --- | --- |
+| `ollama/ollama` | 6.04 GB |
+| `n8n` | 1.44 GB |
+| `postgres:17-alpine` | 297 MB |
+| `nginx:alpine` | 62 MB |
+| `nocodb` | ~500 MB |
+| `llama3.1:8b` | 4.90 GB |
+| **total** | **~13 GB** |
+
+**Use a 32GB stick, not 16GB.** The gzipped archive lands well under that, but a stick too full to rebuild a bundle on is a stick that fails you in the field.
+
+Two things to know:
+
+*   **Rebuild it when the pinned versions change.** A bundle with a stale image set is a bundle that fails on the day it is needed. This is a periodic chore and it needs an owner.
+*   **The Ollama image is 6GB because it ships CUDA and ROCm libraries.** On the laptop path, where Docker gives Ollama no GPU access at all, that is roughly 5GB of dead weight on the media. Tracked in [#21](https://github.com/marras0914/offline-triage-node/issues/21).
+
+The air-gapped install has not yet been verified end to end — that test is [#21](https://github.com/marras0914/offline-triage-node/issues/21).
+
+## 3. Prerequisites
 
 *   Docker Engine and the Compose v2 plugin, with your user in the `docker` group.
 *   A **static** IP on the emergency VLAN — DHCP will strand the router's walled-garden rule.
-*   Enough RAM for the model: ~16GB for `llama3.1` (8B), far less for `phi3`.
-*   Internet access **once**, to pull the images and the model. Everything after that is offline.
+*   Enough RAM for the model: ~16GB comfortable for `llama3.1` (8B), less for `llama3.2:3b` or `phi3`. See the hardware tiers in the [README](README.md#running-on-what-is-actually-available) — the stack runs without a model at all, storing every request for a human instead.
+*   Internet access **once**, either on this machine or on the machine that builds the bundle (§2). Everything after that is offline.
 
-## 3. Install
+## 4. Install
 
 ```bash
 git clone https://github.com/marras0914/offline-triage-node.git
@@ -50,7 +88,7 @@ It is safe to re-run. It preserves an existing `.env` (so secrets are never rota
 
 If step 8 does not return an `id`, start with `docker compose logs n8n`.
 
-## 4. Post-Install: Attach the Triage Data to NocoDB
+## 5. Post-Install: Attach the Triage Data to NocoDB
 
 Coordinators work the queue in NocoDB, which needs the `triage` database added once as a data source. Open `http://<NODE_IP>:8080`, create the admin account, then **Add New Data Source → PostgreSQL**:
 
@@ -68,13 +106,13 @@ Two things worth doing immediately:
 *   Open the **`active_queue`** view. It is ordered by real urgency (Critical → Urgent → Standard, review-flagged first, then oldest) rather than by insertion order.
 *   Filter on **`needs_review = true`** to find requests the model could not classify. These were escalated to Critical automatically and have not been read by anything but a human yet.
 
-## 5. Router / Walled Garden
+## 6. Router / Walled Garden
 
 On the guest VLAN's pre-authorization access list, allow unauthenticated traffic to the node's static IP on **port 80 only**. The portal proxies the webhook, so ports 5678 and 8080 do not need to be reachable from the emergency SSID — keep them on the operator network.
 
 Point the captive portal redirect at `http://<NODE_IP>/`. Nginx serves the form for any unmatched path, which is what makes phones open the portal instead of reporting no internet.
 
-## 6. Verifying by Hand
+## 7. Verifying by Hand
 
 ```bash
 # End to end, from the node itself:
@@ -90,9 +128,9 @@ docker compose exec -T postgres psql -U triage_admin -d triage \
 
 That message should come back `Critical` / `Structural`. If it comes back `needs_review = true`, the `triage_error` column says why.
 
-## 7. Operating Offline
+## 8. Operating Offline
 
-*   **Changing model:** set `TRIAGE_MODEL` in `.env`, then `./install.sh` (pulls it, and the workflow prompt follows the same variable).
-*   **No internet at all:** copy a pre-pulled model into the `ollama_data` volume rather than letting step 5 fail.
+*   **Changing model:** edit the `DEFAULT_MODEL` constant in `n8n/workflows/sos-intake-triage.json`, then re-run `./install.sh`, which reads that line and pulls the matching model. It is deliberately *not* an environment variable: n8n 2.x denies Code nodes access to env and throws when they touch `$env`, which failed every request at the first node until it was found. Re-run `./eval/run-eval.sh` after any model change — the pass bar exists for exactly this.
+*   **No internet at all:** stage an offline bundle first (§2). `install.sh` loads from it and never reaches for the network.
 *   **Backups:** the field data is one database. `docker compose exec -T postgres pg_dump -U triage_admin triage > triage-$(date +%F).sql` onto removable media.
 *   **`N8N_ENCRYPTION_KEY` is load-bearing.** If it changes, n8n can no longer decrypt the Triage Postgres credential and the workflow stops writing. Back `.env` up with the database.

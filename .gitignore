@@ -1,3 +1,4 @@
 # Secrets, generated per node by install.sh.
 .env
 n8n/credentials/*.json
+offline-bundle/

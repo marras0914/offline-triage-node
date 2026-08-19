@@ -14,13 +14,64 @@ Pre-field-test. The stack deploys and the intake pipeline runs end to end, but t
 
 **This is not a substitute for emergency services.** Where any emergency number still answers, call it. This node is built for the hours when nothing answers — and its AI triage is a queue-ordering aid for human coordinators, never an authority on who gets help first. Requests the model cannot classify are escalated to Critical and flagged for a human rather than filed automatically.
 
-## Minimum Hardware Requirements
+## Hardware
+
+### The prepositioned build
+
+What to buy if you are equipping a node deliberately, ahead of time:
 
 *   **Compute (Mini-PC/NUC):** AMD Ryzen 7 8845HS (or Intel Core Ultra 7 155H) to provide sufficient iGPU compute for local AI inference.
-*   **Memory:** Minimum 32GB Dual-Channel DDR5-5600 RAM (critical for LLM memory bandwidth).
+*   **Memory:** 32GB Dual-Channel DDR5-5600 RAM (LLM inference is memory-bandwidth bound).
 *   **Storage:** 1TB Gen 4 NVMe SSD.
 *   **Networking:** Weather-resistant mesh access points (e.g., UniFi U6 Mesh) and a ruggedized PoE switch.
 *   **Power:** LiFePO4 battery pack coupled with a pure sine wave inverter.
+
+### Running on what is actually available
+
+The list above is a target, not a gate. A blueprint for the hours after infrastructure fails is not much use if it starts with a shopping list, so the stack is built to degrade rather than refuse.
+
+**The only hard constraint is RAM**, and only if you want AI triage. Everything else trades down.
+
+| What you have | Model | What you get |
+| --- | --- | --- |
+| Prepositioned NUC, 32GB, iGPU | `llama3.1` 8B | The full design |
+| Any modern laptop, 16GB+, no GPU | `llama3.1` 8B on CPU | Full triage, slower per request |
+| Older laptop, 8GB | `llama3.2:3b` or `phi3` | Triage with measurably worse severity sorting |
+| 4GB, a Raspberry Pi, or no model at all | none | **Intake and dashboard, no AI** — see below |
+
+Storage is not the constraint the spec implies: images and an 8B model come to roughly 13GB, so any disk with 20GB free will do.
+
+### Measured on a laptop, CPU only
+
+Not estimates. This project's own [eval suite](eval/) run on an MSI Commercial 14 (i7-13700H, 32GB) under Docker Desktop on Windows, which gives Ollama **no GPU access at all** — so this is close to the realistic worst case for a machine of that class.
+
+| Model | p50 | p90 | Severity sorting |
+| --- | --- | --- | --- |
+| `llama3.2:1b` | 4.8s | 7.7s | Unusable — collapses every tier into Critical |
+| `llama3.2:3b` | 6.7s | 10.3s | Good: 9/13 Urgent correctly Urgent, 92.5% category |
+
+The gap between 1B and 3B is not subtle, and it is the difference between a queue that sorts and a queue where everything is Critical. **1B is small enough to run anywhere and not worth running** — it passes the schema contract and fails at the actual job. Do not go below 3B.
+
+Latency is comfortable either way: a person is filling in a form, and the request is stored before anyone waits on inference. The nginx proxy allows 300s and the n8n node 180s, so there is a lot of headroom. Throughput is the real limit, because Ollama serialises — see the concurrency caps in `nginx/default.conf`.
+
+### The no-AI tier is real, not a consolation prize
+
+If Ollama is missing, out of memory, or simply too slow, the pipeline does not break. Every request is stored with the person's own words preserved, marked `needs_review`, and defaulted to Critical so it surfaces at the top of the queue. This is the same fail-safe path that handles a crashed model, and it is [verified end to end](ARCHITECTURE.md#4-failure-behaviour) — not a theory about what might happen.
+
+What that leaves you with is a networked intake form feeding a sortable, offline coordinator dashboard, running on almost anything. No triage, but no lost requests either, and a queue a human can work. Set against a clipboard and shouting, that is most of the value.
+
+The AI sorts the queue. It was never what makes the queue exist.
+
+### A laptop brings its own UPS
+
+A laptop is a battery-backed server with a screen and a keyboard attached, which removes most of the power engineering from the ideal build for the first several hours. A phone power bank will usually carry a small router alongside it. The LiFePO4 pack matters for multi-day operation, not for getting started.
+
+### Two things will genuinely stop you
+
+Both are real gaps, tracked rather than glossed:
+
+1.  **You cannot download anything during a blackout** ([#21](https://github.com/marras0914/offline-triage-node/issues/21)). `install.sh` currently pulls five images and a multi-GB model from the internet. Until an offline bundle exists, the node has to be built *before* it is needed — which quietly means the blueprint only helps people who predicted the emergency.
+2.  **The captive portal assumes a capable router** ([#22](https://github.com/marras0914/offline-triage-node/issues/22)). DNS hijacking and the walled garden are UniFi/MikroTik features. On a laptop hotspot there is nothing to make a phone pop the form open, and telling people an IP address by voice does not scale past the people next to you.
 
 ## Roadmap
 

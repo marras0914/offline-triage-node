@@ -15,6 +15,12 @@ STEPS=8
 step() { printf '\n[%s/%s] %s\n' "$1" "$STEPS" "$2"; }
 fail() { printf '\nError: %s\n' "$1" >&2; exit 1; }
 
+# An offline bundle, if one was staged by scripts/make-offline-bundle.sh. Its
+# presence is what makes this installable during the blackout it is built for —
+# nothing can be downloaded then, so everything has to arrive on the media.
+BUNDLE="${BUNDLE_DIR:-offline-bundle}"
+[ -f "$BUNDLE/images.tar.gz" ] && OFFLINE=1 || OFFLINE=0
+
 printf '========================================================\n'
 printf '  Deploying Edge Triage Node (Offline-First)\n'
 printf '========================================================\n'
@@ -26,6 +32,17 @@ command -v docker >/dev/null 2>&1 || fail "docker is not installed. See https://
 docker compose version >/dev/null 2>&1 || fail "docker compose v2 is not available. Install the Compose plugin."
 docker info >/dev/null 2>&1 || fail "the Docker daemon is not running (or this user is not in the docker group)."
 printf '  docker and compose v2 present.\n'
+
+if [ "$OFFLINE" = "1" ]; then
+  printf '  Offline bundle found in %s/ — loading images, no network needed.\n' "$BUNDLE"
+  gunzip -c "$BUNDLE/images.tar.gz" | docker load \
+    || fail "could not load images from $BUNDLE/images.tar.gz"
+  [ -f "$BUNDLE/MANIFEST.txt" ] && grep -E '^(built|model):' "$BUNDLE/MANIFEST.txt" | sed 's/^/    /'
+else
+  printf '  No offline bundle; images and the model will be pulled from the network.\n'
+  printf '  To build a node that installs without a connection, run\n'
+  printf '  scripts/make-offline-bundle.sh on a machine that has one first.\n'
+fi
 
 # ---------------------------------------------------------------------------
 step 2 "Configuring .env..."
@@ -127,11 +144,30 @@ for _ in $(seq 1 30); do
   sleep 2
 done
 
-# `ollama pull`, not `ollama run` — run opens an interactive REPL and would hang
-# a non-interactive install forever.
-printf '  This can take several minutes on a slow link.\n'
-docker compose exec -T ollama ollama pull "$TRIAGE_MODEL" \
-  || fail "could not pull '$TRIAGE_MODEL'. With no internet access, copy a model into the ollama_data volume instead."
+if docker compose exec -T ollama ollama list 2>/dev/null | grep -q "^${TRIAGE_MODEL}[[:space:]]"; then
+  printf '  Already present; nothing to fetch.\n'
+elif [ "$OFFLINE" = "1" ] && [ -f "$BUNDLE/ollama-models.tar.gz" ]; then
+  # Ollama reads its blob directory at startup, so restoring the directory is
+  # the whole import — there is no separate register step.
+  printf '  Restoring the model from the offline bundle...\n'
+  gunzip -c "$BUNDLE/ollama-models.tar.gz" \
+    | docker compose exec -T ollama tar -xzf - -C /root/.ollama \
+    || fail "could not restore the model from $BUNDLE/ollama-models.tar.gz"
+  docker compose restart ollama >/dev/null
+  for _ in $(seq 1 30); do
+    docker compose exec -T ollama ollama list >/dev/null 2>&1 && break
+    sleep 2
+  done
+  docker compose exec -T ollama ollama list 2>/dev/null | grep -q "^${TRIAGE_MODEL}[[:space:]]" \
+    || fail "the bundle was restored but '$TRIAGE_MODEL' is not in it. Rebuild the bundle: scripts/make-offline-bundle.sh"
+  printf '  Restored from bundle.\n'
+else
+  # `ollama pull`, not `ollama run` — run opens an interactive REPL and would hang
+  # a non-interactive install forever.
+  printf '  Pulling over the network; this takes several minutes on a slow link.\n'
+  docker compose exec -T ollama ollama pull "$TRIAGE_MODEL" \
+    || fail "could not pull '$TRIAGE_MODEL'. With no connection, stage a bundle first: scripts/make-offline-bundle.sh on a machine that has one."
+fi
 
 # ---------------------------------------------------------------------------
 step 6 "Importing the n8n credential and workflow..."
