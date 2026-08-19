@@ -56,7 +56,8 @@ Also in this phase, from review rather than the original plan:
 
 *Prevent the local agent from hallucinating under stress, and extend the system's logic.*
 
-- [ ] [Chaos testing](https://github.com/marras0914/offline-triage-node/issues/9) — a committed golden set of panicked, ambiguous messages, run as a regression suite rather than eyeballed
+- [x] [Chaos testing](https://github.com/marras0914/offline-triage-node/issues/9) — 42-case golden set and a regression harness that loads the deployed prompt, so a prompt edit is tested by definition ([eval/](eval/)). Baselined; still to re-run at 8B
+- [ ] [Prompt injection can bury a Critical request](https://github.com/marras0914/offline-triage-node/issues/20) — confirmed and mitigated by a deterministic severity floor; the eval `inject-*` cases are the regression test
 - [ ] [Model invents injuries from noise](https://github.com/marras0914/offline-triage-node/issues/10) — confirmed defect: pure gibberish produced *"Unconscious person needs medical attention."* Escalating noise to Critical is correct; fabricating a casualty is not
 - [ ] [Deduplicate rapid-fire requests](https://github.com/marras0914/offline-triage-node/issues/11) — the same household will submit several times
 - [ ] [Backend utilities](https://github.com/marras0914/offline-triage-node/issues/12) — sanitization, and physical triggers so a coordinator away from the screen still gets told

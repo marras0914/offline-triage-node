@@ -54,27 +54,38 @@ const GOLDEN = flag('golden', join(HERE, 'golden-set.jsonl'));
 const quiet = has('quiet');
 
 // ------------------------------------------------- load the deployed workflow
-function loadNormalizeIntake(path) {
-  let workflow;
+function loadWorkflow(path) {
   try {
-    workflow = JSON.parse(readFileSync(path, 'utf8'));
+    return JSON.parse(readFileSync(path, 'utf8'));
   } catch (error) {
     // Fall back to the repo-relative copy so the harness also runs from a
     // checkout, not just from inside the container.
-    const local = join(HERE, '..', 'n8n', 'workflows', 'sos-intake-triage.json');
-    workflow = JSON.parse(readFileSync(local, 'utf8'));
+    return JSON.parse(readFileSync(join(HERE, '..', 'n8n', 'workflows', 'sos-intake-triage.json'), 'utf8'));
   }
-  const node = workflow.nodes.find((n) => n.name === 'Normalize Intake');
-  if (!node?.parameters?.jsCode) {
-    throw new Error('Normalize Intake node or its jsCode not found in the workflow');
-  }
-  // The Code node body is a function body referencing $input and returning
-  // { json: ... }. Nothing else from the n8n runtime is used, deliberately:
-  // n8n 2.x denies Code nodes access to $env and throws on contact.
-  return new Function('$input', node.parameters.jsCode);
 }
 
-const normalize = loadNormalizeIntake(WORKFLOW);
+function codeNode(workflow, name, ...params) {
+  const node = workflow.nodes.find((n) => n.name === name);
+  if (!node?.parameters?.jsCode) throw new Error(`Code node "${name}" not found in the workflow`);
+  // A Code node body is a function body returning { json: ... }. Nothing else
+  // from the n8n runtime is used, deliberately: n8n 2.x denies Code nodes access
+  // to $env and throws on contact.
+  return new Function(...params, node.parameters.jsCode);
+}
+
+const workflow = loadWorkflow(WORKFLOW);
+const normalize = codeNode(workflow, 'Normalize Intake', '$input');
+// Both Code nodes are run, not just the first. Validate Triage carries the
+// deterministic severity floor and the injection check, so scoring the model's
+// raw answer alone would miss the very safeguards that decide what reaches a
+// coordinator. What this harness measures is what lands in Postgres.
+const validate = codeNode(workflow, 'Validate Triage', '$', '$input');
+
+// Validate Triage reads the intake back via $('Normalize Intake').first().json.
+const nodeRef = (intakeJson) => (name) => {
+  if (name !== 'Normalize Intake') throw new Error(`unexpected node reference: ${name}`);
+  return { first: () => ({ json: intakeJson }), item: { json: intakeJson } };
+};
 
 const cases = readFileSync(GOLDEN, 'utf8')
   .split('\n')
@@ -148,39 +159,56 @@ for (const testCase of cases) {
   const started = Date.now();
 
   try {
-    const response = await fetch(`${OLLAMA_URL}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(180000),
-    });
-    const body = await response.json();
-    if (body.error) throw new Error(typeof body.error === 'string' ? body.error : 'ollama error');
+    let httpOut;
+    try {
+      const response = await fetch(`${OLLAMA_URL}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(180000),
+      });
+      httpOut = await response.json();
+    } catch (networkError) {
+      // Shape matches what the HTTP node hands downstream when it fails, so the
+      // fail-safe path gets exercised rather than skipped.
+      httpOut = { error: String(networkError.message || networkError) };
+    }
 
-    const parsed = JSON.parse(body.message.content);
-    record.got = parsed;
-
-    // --- schema, the hard contract
-    if (!SEVERITIES.includes(parsed.severity)) record.problems.push(`schema: severity=${JSON.stringify(parsed.severity)}`);
-    if (!CATEGORIES.includes(parsed.category)) record.problems.push(`schema: category=${JSON.stringify(parsed.category)}`);
-    if (typeof parsed.summary !== 'string') record.problems.push('schema: summary not a string');
-    if (!Number.isInteger(parsed.people_affected)) record.problems.push('schema: people_affected not an integer');
+    // --- schema: a contract about the MODEL's own output
+    try {
+      const modelOut = JSON.parse(httpOut.message.content);
+      record.modelOut = modelOut;
+      if (!SEVERITIES.includes(modelOut.severity)) record.problems.push(`schema: severity=${JSON.stringify(modelOut.severity)}`);
+      if (!CATEGORIES.includes(modelOut.category)) record.problems.push(`schema: category=${JSON.stringify(modelOut.category)}`);
+      if (typeof modelOut.summary !== 'string') record.problems.push('schema: summary not a string');
+      if (!Number.isInteger(modelOut.people_affected)) record.problems.push('schema: people_affected not an integer');
+    } catch (parseError) {
+      record.problems.push(`schema: ${httpOut.error ? `no output (${String(httpOut.error).slice(0, 60)})` : 'model output unparseable'}`);
+    }
     record.schemaValid = record.problems.length === 0;
 
-    // --- labels
+    // --- labels: scored on the PIPELINE's output, after the floor and the
+    //     injection check have had their say. This is what a coordinator sees.
+    const out = validate(nodeRef(built.json), { item: { json: httpOut } }).json;
+    record.got = out;
+    record.needsReview = out.needs_review;
+    record.triageError = out.triage_error;
+    record.floorApplied = /severity floor applied/.test(out.triage_error || '');
+    record.injectionFlagged = /instruction injection/.test(out.triage_error || '');
+
     const sevOk = testCase.expect.severity_ok || [testCase.expect.severity];
     const catOk = testCase.expect.category_ok || [testCase.expect.category];
-    record.severityMatch = sevOk.includes(parsed.severity);
-    record.categoryMatch = catOk.includes(parsed.category);
+    record.severityMatch = sevOk.includes(out.severity);
+    record.categoryMatch = catOk.includes(out.category);
 
     if (testCase.expect.people !== undefined) {
       const peopleOk = testCase.expect.people_ok || [testCase.expect.people];
-      record.peopleMatch = peopleOk.includes(parsed.people_affected);
+      record.peopleMatch = peopleOk.includes(out.people_affected);
     }
 
     // --- fabrication
     if (testCase.expect.no_fabrication) {
-      const invented = fabricatedTerms(parsed.summary, testCase.message);
+      const invented = fabricatedTerms(out.summary, testCase.message);
       record.fabricated = invented;
       if (invented.length) record.problems.push(`fabricated: ${invented.join(', ')}`);
     }
@@ -241,6 +269,15 @@ if (peopleAccuracy !== null) {
   console.log(`        people_affected      ${pct(peopleAccuracy)} over ${peopleChecked.length} cases (not gated)`);
 }
 console.log(`        over-escalated       ${overEscalated.length} Standard cases read as Critical (noise, not a failure)`);
+
+// The deterministic backstops in Validate Triage. Every one of these is a case
+// the model got wrong in the dangerous direction and the regex caught.
+const floorApplied = results.filter((r) => r.floorApplied);
+const injectionFlagged = results.filter((r) => r.injectionFlagged);
+const needsReview = results.filter((r) => r.needsReview).length;
+console.log(`        severity floor       ${floorApplied.length} raised to Critical by keyword backstop${floorApplied.length ? ': ' + floorApplied.map((r) => r.id).join(', ') : ''}`);
+console.log(`        injection flagged    ${injectionFlagged.length}${injectionFlagged.length ? ': ' + injectionFlagged.map((r) => r.id).join(', ') : ''}`);
+console.log(`        needs_review         ${needsReview}/${n} rows would reach a human for a second look`);
 
 if (missedCritical.length) {
   console.log('\n  MISSED CRITICAL — each of these is someone who does not get help:');

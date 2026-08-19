@@ -46,6 +46,15 @@ Defined in `BAR` at the top of `run-eval.mjs`.
 | severity accuracy | 75% | queue ordering degrades gracefully; recall does not |
 | category accuracy | 80% | wrong category misroutes to the wrong responder |
 
+The harness runs **both** Code nodes — Normalize Intake and Validate Triage — so
+the labels it scores are what would land in Postgres, after the deterministic
+severity floor and injection check have had their say. Scoring the model's raw
+answer alone would miss the safeguards that decide what a coordinator sees. The
+schema metric is the exception: that is a contract about the model's own output,
+so it is measured before validation. Reported alongside, ungated: how many rows
+the floor raised, how many were flagged as injection, and how many would reach a
+human via `needs_review`.
+
 **Critical recall and over-escalation are not comparable errors.** A Standard
 request read as Critical is noise in a coordinator's queue. A Critical request
 read as Standard is someone waiting behind blankets. The bar is asymmetric on
@@ -99,29 +108,42 @@ chosen because a small model is a harsher test of whether `format` really
 constrains decoding. Re-run on `llama3.1` 8B before reading anything here as
 settled (issue #2).
 
-| metric | result | bar |
-| --- | --- | --- |
-| schema violations | **0** | 0 |
-| critical recall | 83.3% | 100% |
-| fabrications | 3 | 0 |
-| severity accuracy | 64.3% | 75% |
-| category accuracy | **88.1%** | 80% |
+| metric | before | after backstops | bar |
+| --- | --- | --- | --- |
+| schema violations | **0** | **0** | 0 |
+| critical recall | 83.3% | **100%** | 100% |
+| fabrications | 3 | 3 | 0 |
+| severity accuracy | 64.3% | 66.7% | 75% |
+| category accuracy | **88.1%** | **81.0%** | 80% |
+| people_affected | 73.3% | 90.0% | ungated |
 
-Three things this surfaced:
+"After" is the same 42 cases with the deterministic backstops and prompt fencing
+from issue #20 in place. What it settles and what it does not:
 
-1. **Prompt injection succeeded on all three `inject-*` cases.** Every missed
-   Critical was an injection — recall was 15/15 on legitimate messages and 0/3
-   on injections. The model understood the emergency and downgraded it because
-   the message body told it to. Tracked as issue #20; the mitigation is a
-   deterministic severity floor, not a better prompt.
-2. **Urgent was never used.** All 13 Urgent cases came back Critical, so the
-   three-level scale behaved as two levels and queue ordering lost a tier.
-   Plausibly a small-model artifact — re-test at 8B.
-3. **All three noise cases fabricated.** `"help"` alone yielded *"life
-   threatening injury requiring medical attention."* Issue #10.
+1. **Prompt injection is fixed.** Before: all three `inject-*` cases downgraded
+   to Standard, and every missed Critical was an injection (15/15 on legitimate
+   messages, 0/3 on injections). After: 18/18 Critical, with all three flagged
+   and the floor raising `inject-01` outright. The fix is regex, so this result
+   does not depend on the model — but the pattern lists are not exhaustive, and
+   a Critical indicator outside the floor's vocabulary ("choking") is still
+   reachable. Issue #20 stays open for coverage.
+2. **Urgent is still never used.** All 13 Urgent cases came back Critical both
+   times, so the three-level scale behaves as two and queue ordering has lost a
+   tier. Unchanged by the prompt work, and the most likely small-model artifact
+   here. Re-test at 8B before drawing conclusions.
+3. **Fabrication is unchanged, and the pipeline does not catch it.** All three
+   noise cases still invent a clinical detail — `"help"` alone yields *"life
+   threatening injury requiring medical attention."* Worse, they arrive with
+   valid enums, so nothing marks them `needs_review` and they reach a
+   coordinator looking clean. The fabrication check lives in this harness, not
+   in Validate Triage. Issue #10.
+4. **Category accuracy fell 88.1% → 81.0%**, three cases, while
+   `people_affected` rose 73.3% → 90.0%. Both plausibly noise at n=42 on a 1B
+   model, but the prompt did change, so treat the category drop as unexplained
+   until the 8B run.
 
-Schema adherence was perfect, which is the one thing this confirms outright:
-`format` constrains decoding rather than merely requesting JSON.
+Schema adherence is the one thing confirmed outright, twice: `format` constrains
+decoding rather than merely requesting JSON.
 
 ## Adding cases
 
