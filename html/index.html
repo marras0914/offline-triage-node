@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Emergency Relief Network</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f4f4f5; color: #18181b; padding: 20px; max-width: 500px; margin: 0 auto; }
+        .header { background-color: #ef4444; color: white; padding: 20px; border-radius: 8px 8px 0 0; text-align: center; }
+        .form-container { background: white; padding: 20px; border-radius: 0 0 8px 8px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }
+        label { display: block; margin-bottom: 5px; font-weight: 600; }
+        input, textarea { width: 100%; padding: 10px; margin-bottom: 15px; border: 1px solid #d4d4d8; border-radius: 4px; box-sizing: border-box; }
+        button { width: 100%; background-color: #ef4444; color: white; border: none; padding: 12px; font-size: 16px; font-weight: bold; border-radius: 4px; cursor: pointer; }
+        button:active { background-color: #dc2626; }
+        button:disabled { background-color: #fca5a5; cursor: default; }
+        .status { margin-top: 15px; text-align: center; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h2>Local Emergency Network</h2>
+        <p>Submit a request for local offline assistance.</p>
+    </div>
+    <div class="form-container">
+        <form id="sosForm">
+            <label for="name">Name or Family Name</label>
+            <input type="text" id="name" required placeholder="e.g., The Smith Family">
+
+            <label for="location">Current Location</label>
+            <input type="text" id="location" required placeholder="e.g., Corner of 4th and Main">
+
+            <label for="message">What do you need?</label>
+            <textarea id="message" rows="4" required placeholder="Describe the emergency or supplies needed..."></textarea>
+
+            <button type="submit">Submit Request</button>
+            <div id="statusMessage" class="status"></div>
+        </form>
+    </div>
+
+    <script>
+        var form = document.getElementById('sosForm');
+        var button = form.querySelector('button');
+        var statusDiv = document.getElementById('statusMessage');
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            // Held down until the request settles. A slow local model means
+            // several seconds of nothing happening, which is exactly when a
+            // frightened person taps the button again.
+            button.disabled = true;
+            statusDiv.textContent = "Sending... keep this page open.";
+            statusDiv.style.color = "#d97706";
+
+            const payload = {
+                name: document.getElementById('name').value,
+                location: document.getElementById('location').value,
+                message: document.getElementById('message').value
+            };
+
+            try {
+                // Same-origin: nginx proxies this to the n8n webhook, so there is
+                // no CORS preflight and no node IP to substitute into this file.
+                const response = await fetch('/api/sos', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                const result = await response.json().catch(() => ({}));
+
+                // A crashed n8n execution answers 200 with an empty body, so
+                // response.ok alone would show "help is coming" when nothing was
+                // stored. Only an explicit status:received from the workflow's
+                // final node counts as success.
+                if (result.status !== 'received') {
+                    throw new Error(result.message || 'Request was not stored');
+                }
+
+                statusDiv.textContent = result.id
+                    ? "Request #" + result.id + " received. Help is being routed."
+                    : "Request received. Help is being routed.";
+                statusDiv.style.color = "#16a34a";
+                form.reset();
+            } catch (error) {
+                statusDiv.textContent = "NOT SENT. Stay connected to this network and try again. "
+                    + "If this keeps failing, find a triage coordinator in person.";
+                statusDiv.style.color = "#dc2626";
+            } finally {
+                button.disabled = false;
+            }
+        });
+    </script>
+</body>
+</html>

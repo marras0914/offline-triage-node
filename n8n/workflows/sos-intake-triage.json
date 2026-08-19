@@ -1,0 +1,219 @@
+{
+  "id": "sosIntakeTriage1",
+  "name": "SOS Intake & AI Triage",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveExecutionProgress": true
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## SOS Intake & AI Triage\n\nnginx proxies `POST /api/sos` on port 80 to this webhook, so the portal is same-origin and no node IP is baked into the HTML.\n\n**A request is never lost.** If Ollama is down, slow, or returns garbage, the row is still written — flagged `needs_review` with severity defaulted to Critical.\n\n**Nothing in this workflow may throw.** An n8n execution error returns HTTP 200 with an empty body, which the portal would read as success. Partial submissions are therefore stored and flagged, never rejected; only a wholly empty POST gets a 400.\n\nModel: edit `DEFAULT_MODEL` in Normalize Intake. `install.sh` reads it from this file and pulls that model.",
+        "height": 400,
+        "width": 420,
+        "color": 4
+      },
+      "id": "a1000000-0000-4000-8000-000000000001",
+      "name": "About this workflow",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-180, -360]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "sos-intake",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000002",
+      "name": "SOS Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-180, 120],
+      "webhookId": "sos-intake",
+      "notes": "Reached via nginx at http://<node-ip>/api/sos"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// The portal posts { name, location, message }. Clean it once here; everything\n// downstream reads these fields, and raw_message is stored verbatim so a\n// coordinator can always re-read what the person actually typed.\nconst body = $input.item.json.body || {};\nconst clean = (value, max) => String(value == null ? '' : value).replace(/\\s+/g, ' ').trim().slice(0, max);\n\nconst reporter_name = clean(body.name, 200);\nconst location_text = clean(body.location, 500);\nconst raw_message = clean(body.message, 4000);\n\n// Someone in a panic who submits a partial form must not lose their request, so\n// missing fields are flagged for a human rather than rejected. A name and an\n// injury with no address is still actionable; nothing at all is not.\nconst missing = [];\nif (!reporter_name) missing.push('name');\nif (!location_text) missing.push('location');\nif (!raw_message) missing.push('message');\nconst has_content = missing.length < 3;\n\n// The model this workflow prompts for. install.sh reads this exact line out of\n// the JSON and pulls the matching model, so the two cannot drift apart.\n//\n// Deliberately NOT read from $env: n8n 2.x denies env access inside Code nodes\n// and *throws* when you touch $env, which would fail every request at the first\n// node. A thrown error here is indistinguishable from success to the portal.\nconst DEFAULT_MODEL = 'llama3.1';\n\nconst SYSTEM_PROMPT = [\n  'You are an emergency dispatcher triaging requests for help during a disaster.',\n  'Read the request and return only JSON matching the schema.',\n  '',\n  'severity:',\n  '  Critical - life is in immediate danger: not breathing, unconscious, severe bleeding, trapped, drowning, active fire.',\n  '  Urgent   - will become life-threatening within hours: broken bones, insulin or oxygen needed, infant or elderly with no shelter.',\n  '  Standard - a real need, but the person is stable: food, water, blankets, charging, information, damage report.',\n  '',\n  'category:',\n  '  Medical    - injury, illness, medication, pregnancy, mental health.',\n  '  Structural - collapse, fire, flooding, trapped persons, unsafe building, blocked road.',\n  '  Supply     - food, water, fuel, shelter, hygiene, power, communication.',\n  '',\n  'Rules:',\n  '- If the request could plausibly be read as life-threatening, choose the higher severity.',\n  '- If more than one category applies, choose the one that decides who must respond first.',\n  '- summary: one sentence, at most 20 words, using only facts present in the request.',\n  '- people_affected: how many people need help. Use 1 if the request does not say.',\n  '- Never invent names, addresses, injuries or numbers.'\n].join('\\n');\n\n// Passed to Ollama as `format`, which constrains decoding to this shape rather\n// than just asking the model politely for JSON.\nconst schema = {\n  type: 'object',\n  properties: {\n    severity: { type: 'string', enum: ['Critical', 'Urgent', 'Standard'] },\n    category: { type: 'string', enum: ['Medical', 'Structural', 'Supply'] },\n    summary: { type: 'string' },\n    people_affected: { type: 'integer' }\n  },\n  required: ['severity', 'category', 'summary', 'people_affected']\n};\n\nconst userContent = [\n  'Reported by: ' + (reporter_name || '(not given)'),\n  'Location: ' + (location_text || '(not given)'),\n  'Request: ' + (raw_message || '(not given)')\n].join('\\n');\n\nreturn {\n  json: {\n    reporter_name,\n    location_text,\n    raw_message,\n    missing_fields: missing,\n    has_content,\n    model: DEFAULT_MODEL,\n    ollama_payload: {\n      model: DEFAULT_MODEL,\n      stream: false,\n      format: schema,\n      options: { temperature: 0, num_predict: 200 },\n      messages: [\n        { role: 'system', content: SYSTEM_PROMPT },\n        { role: 'user', content: userContent }\n      ]\n    }\n  }\n};"
+      },
+      "id": "a1000000-0000-4000-8000-000000000003",
+      "name": "Normalize Intake",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [40, 120]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "has-any-content",
+              "leftValue": "={{ $json.has_content }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000008",
+      "name": "Has Any Content?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [260, 120],
+      "notes": "Only a completely empty POST is turned away — a probe or a bot on the open SSID."
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"status\": \"rejected\", \"message\": \"Please describe what you need.\" } }}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "id": "a1000000-0000-4000-8000-000000000009",
+      "name": "Reject Empty",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [480, 340]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://ollama:11434/api/chat",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.ollama_payload) }}",
+        "options": {
+          "timeout": 180000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "a1000000-0000-4000-8000-000000000004",
+      "name": "Ollama Triage",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [480, 120],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000,
+      "onError": "continueRegularOutput",
+      "notes": "Internal Docker DNS only; Ollama is never published to the host. Errors fall through to Validate Triage, which flags the row for review."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Nothing the model does may cost us a request. Any failure here degrades to a\n// stored row flagged for a human, with severity escalated rather than guessed.\n//\n// This node must never throw: an n8n execution error returns HTTP 200 with an\n// empty body, which the portal cannot distinguish from a successful intake.\n//\n// .first() rather than .item: one webhook execution carries exactly one request,\n// and item pairing is not guaranteed to survive an error on the HTTP node — which\n// is precisely the case this node exists to handle.\nconst intake = $('Normalize Intake').first().json;\n\nconst SEVERITIES = ['Critical', 'Urgent', 'Standard'];\nconst CATEGORIES = ['Medical', 'Structural', 'Supply'];\n\nlet severity = 'Critical';\nlet category = 'Medical';\nlet summary = null;\nlet people_affected = null;\nconst problems = [];\n\nif (intake.missing_fields && intake.missing_fields.length) {\n  problems.push('incomplete submission, missing: ' + intake.missing_fields.join(', '));\n}\n\nconst res = $input.item.json || {};\n\ntry {\n  if (res.error) {\n    throw new Error(typeof res.error === 'string' ? res.error : (res.error.message || 'Ollama request failed'));\n  }\n\n  const content = res.message && res.message.content;\n  if (!content) {\n    throw new Error('Ollama returned no message content');\n  }\n\n  const parsed = JSON.parse(content);\n\n  if (SEVERITIES.includes(parsed.severity)) {\n    severity = parsed.severity;\n  } else {\n    problems.push('unrecognised severity: ' + JSON.stringify(parsed.severity));\n  }\n\n  if (CATEGORIES.includes(parsed.category)) {\n    category = parsed.category;\n  } else {\n    problems.push('unrecognised category: ' + JSON.stringify(parsed.category));\n  }\n\n  summary = String(parsed.summary == null ? '' : parsed.summary).trim().slice(0, 300) || null;\n\n  const n = Number.parseInt(parsed.people_affected, 10);\n  people_affected = Number.isFinite(n) && n >= 0 ? n : null;\n} catch (error) {\n  problems.push(String((error && error.message) || error));\n}\n\nif (problems.length && !summary) {\n  // Give the coordinator something readable to scan even with no summary.\n  summary = intake.raw_message ? intake.raw_message.slice(0, 140) : null;\n}\n\nreturn {\n  json: {\n    reporter_name: intake.reporter_name,\n    location_text: intake.location_text,\n    raw_message: intake.raw_message,\n    severity,\n    category,\n    summary,\n    people_affected,\n    needs_review: problems.length > 0,\n    triage_error: problems.length ? problems.join('; ').slice(0, 500) : null,\n    triage_model: intake.model,\n    triaged_at: new Date().toISOString()\n  }\n};"
+      },
+      "id": "a1000000-0000-4000-8000-000000000005",
+      "name": "Validate Triage",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [700, 120]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "schema": {
+          "__rl": true,
+          "mode": "name",
+          "value": "public"
+        },
+        "table": {
+          "__rl": true,
+          "mode": "name",
+          "value": "requests"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "reporter_name": "={{ $json.reporter_name }}",
+            "location_text": "={{ $json.location_text }}",
+            "raw_message": "={{ $json.raw_message }}",
+            "severity": "={{ $json.severity }}",
+            "category": "={{ $json.category }}",
+            "summary": "={{ $json.summary }}",
+            "people_affected": "={{ $json.people_affected }}",
+            "needs_review": "={{ $json.needs_review }}",
+            "triage_error": "={{ $json.triage_error }}",
+            "triage_model": "={{ $json.triage_model }}",
+            "triaged_at": "={{ $json.triaged_at }}"
+          },
+          "matchingColumns": ["id"],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000006",
+      "name": "Store Request",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [920, 120],
+      "credentials": {
+        "postgres": {
+          "id": "triagePostgres1",
+          "name": "Triage Postgres"
+        }
+      },
+      "notes": "Writes to the `triage` database, not n8n's own."
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"status\": \"received\", \"id\": $json.id } }}",
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000007",
+      "name": "Respond to Portal",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1140, 120],
+      "notes": "The portal treats a missing status:received as failure, so this is the only path that reports success. Severity is deliberately not returned: the portal must neither reassure nor alarm."
+    }
+  ],
+  "connections": {
+    "SOS Webhook": {
+      "main": [[{ "node": "Normalize Intake", "type": "main", "index": 0 }]]
+    },
+    "Normalize Intake": {
+      "main": [[{ "node": "Has Any Content?", "type": "main", "index": 0 }]]
+    },
+    "Has Any Content?": {
+      "main": [
+        [{ "node": "Ollama Triage", "type": "main", "index": 0 }],
+        [{ "node": "Reject Empty", "type": "main", "index": 0 }]
+      ]
+    },
+    "Ollama Triage": {
+      "main": [[{ "node": "Validate Triage", "type": "main", "index": 0 }]]
+    },
+    "Validate Triage": {
+      "main": [[{ "node": "Store Request", "type": "main", "index": 0 }]]
+    },
+    "Store Request": {
+      "main": [[{ "node": "Respond to Portal", "type": "main", "index": 0 }]]
+    }
+  },
+  "pinData": {}
+}

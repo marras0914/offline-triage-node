@@ -1,0 +1,114 @@
+# Values come from .env, which install.sh creates (and generates secrets into)
+# on first run. The `:?` guards fail the stack fast rather than booting a node
+# with an empty database password.
+
+services:
+  portal:
+    image: nginx:alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./html:/usr/share/nginx/html:ro
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - edge_network
+    depends_on:
+      - n8n
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    # Deliberately not published to the host: the model is reachable only over
+    # internal Docker DNS, so nothing on the open guest VLAN can drive it.
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - edge_network
+
+  postgres:
+    # n8n 2.x warns that 16 is outside its supported range.
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=triage_admin
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      - POSTGRES_DB=n8n_primary
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Creates the `triage` and `nocodb_meta` databases and the requests
+      # schema on first boot of an empty volume.
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U triage_admin -d triage"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - edge_network
+
+  nocodb:
+    image: nocodb/nocodb:latest
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      # NocoDB's own metadata lives in its own database. The triage data is
+      # attached separately as a read/write data source (see DEPLOYMENT.md), so
+      # a coordinator's UI never has n8n's credential tables in reach.
+      - NC_DB=pg://postgres:5432?u=triage_admin&p=${POSTGRES_PASSWORD:?}&d=nocodb_meta
+      - NC_AUTH_JWT_SECRET=${NC_AUTH_JWT_SECRET:?set NC_AUTH_JWT_SECRET in .env}
+      - NC_DISABLE_TELE=true
+    volumes:
+      - nocodb_data:/usr/app/data
+    networks:
+      - edge_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  n8n:
+    # Pinned, not :latest. This is the version the workflow is verified against,
+    # and a field rebuild must not silently pull a release that changes node
+    # behaviour — n8n 2.x already broke $env access inside Code nodes once.
+    image: docker.n8n.io/n8nio/n8n:2.35.4
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      - NODE_ENV=production
+      # Operator-facing only. Survivors reach the webhook through nginx on :80.
+      - WEBHOOK_URL=http://${NODE_IP:?set NODE_IP in .env}:5678/
+      - GENERIC_TIMEZONE=${GENERIC_TIMEZONE:-America/Chicago}
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=n8n_primary
+      - DB_POSTGRESDB_USER=triage_admin
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD:?}
+      # Must stay stable: it decrypts the imported Postgres credential.
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY:?set N8N_ENCRYPTION_KEY in .env}
+      - N8N_DIAGNOSTICS_ENABLED=false
+    volumes:
+      - n8n_data:/home/node/.n8n
+      # Read-only mounts so `n8n import:workflow` / `import:credentials` can run
+      # inside the container during install.
+      - ./n8n/workflows:/workflows:ro
+      - ./n8n/credentials:/credentials:ro
+    networks:
+      - edge_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+
+networks:
+  edge_network:
+    driver: bridge
+
+volumes:
+  ollama_data:
+  n8n_data:
+  postgres_data:
+  nocodb_data:
