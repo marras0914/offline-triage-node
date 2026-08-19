@@ -95,6 +95,9 @@ services:
       # inside the container during install.
       - ./n8n/workflows:/workflows:ro
       - ./n8n/credentials:/credentials:ro
+      # The eval harness runs in here: node is already present and `ollama`
+      # resolves over the internal network. See eval/README.md.
+      - ./eval:/eval:ro
     networks:
       - edge_network
     depends_on:
