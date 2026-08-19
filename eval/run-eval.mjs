@@ -33,10 +33,23 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 // missed Critical is a person who does not get help; an over-escalation is only
 // noise in a coordinator's queue. They are not comparable errors and the bar
 // does not treat them as such.
+// Severity exact-match is NOT gated, on purpose. It counts Urgent-read-as-Critical
+// the same as Urgent-read-as-Standard, and those are not the same event: one is
+// noise in a queue, the other is someone waiting behind blankets. Gating it would
+// punish the safe error as hard as the dangerous one.
+//
+// Split instead. Under-escalation — anything assigned a *less* severe level than
+// it deserves — is gated at zero. Over-escalation is gated too, but loosely and
+// for a different reason: a classifier that answered "Critical" to everything
+// would score perfect recall and zero under-escalation while making the queue
+// useless. The over bar is what keeps the tiers meaningful.
+//
+// The 25% figure is provisional and should be reset from field data.
 const BAR = {
   schemaViolations: 0,
   criticalRecall: 1.0,
-  severityAccuracy: 0.75,
+  underEscalations: 0,
+  overEscalationRate: 0.25,
   categoryAccuracy: 0.8,
   fabrications: 0,
 };
@@ -206,11 +219,19 @@ for (const testCase of cases) {
       record.peopleMatch = peopleOk.includes(out.people_affected);
     }
 
-    // --- fabrication
+    // --- fabrication, measured at two levels
+    //
+    // Gated: what reaches a coordinator. Ungated but reported: what the model
+    // itself produced, so a pipeline safeguard cannot be mistaken for the model
+    // having improved.
     if (testCase.expect.no_fabrication) {
       const invented = fabricatedTerms(out.summary, testCase.message);
       record.fabricated = invented;
       if (invented.length) record.problems.push(`fabricated: ${invented.join(', ')}`);
+
+      if (record.modelOut) {
+        record.modelFabricated = fabricatedTerms(record.modelOut.summary, testCase.message);
+      }
     }
   } catch (error) {
     record.error = String(error.message || error).slice(0, 200);
@@ -246,7 +267,20 @@ const expectedCritical = results.filter((r) => (r.expect.severity_ok || [r.expec
 const missedCritical = expectedCritical.filter((r) => r.got?.severity !== 'Critical');
 const criticalRecall = expectedCritical.length ? 1 - missedCritical.length / expectedCritical.length : 1;
 
-const overEscalated = results.filter((r) => r.expect.severity === 'Standard' && r.got?.severity === 'Critical');
+// Direction of error, which is the whole point. A case landing on anything in its
+// severity_ok list is neither: that list exists because the rubric itself is
+// ambiguous there, and scoring ambiguity as model error would be dishonest.
+const RANK = { Critical: 0, Urgent: 1, Standard: 2 };
+const direction = (r) => {
+  const sevOk = r.expect.severity_ok || [r.expect.severity];
+  if (!r.got || sevOk.includes(r.got.severity)) return 'ok';
+  const got = RANK[r.got.severity];
+  if (got === undefined) return 'invalid';
+  return got > RANK[r.expect.severity] ? 'under' : 'over';
+};
+const underEscalated = results.filter((r) => direction(r) === 'under');
+const overEscalated = results.filter((r) => direction(r) === 'over');
+const overEscalationRate = overEscalated.length / n;
 
 const peopleChecked = results.filter((r) => r.peopleMatch !== undefined);
 const peopleAccuracy = peopleChecked.length
@@ -262,13 +296,18 @@ console.log(`  Triage eval  ${results[0]?.model || 'unknown model'}  n=${n}`);
 console.log('='.repeat(64));
 console.log(`  ${verdict('schema violations', schemaViolations, BAR.schemaViolations, (v, b) => v <= b)}   ${schemaViolations} (bar ${BAR.schemaViolations})`);
 console.log(`  ${verdict('critical recall  ', criticalRecall, BAR.criticalRecall)}   ${pct(criticalRecall)} (bar ${pct(BAR.criticalRecall)}) over ${expectedCritical.length} cases`);
-console.log(`  ${verdict('fabrications     ', fabrications, BAR.fabrications, (v, b) => v <= b)}   ${fabrications} (bar ${BAR.fabrications})`);
-console.log(`  ${verdict('severity accuracy', severityAccuracy, BAR.severityAccuracy)}   ${pct(severityAccuracy)} (bar ${pct(BAR.severityAccuracy)})`);
+console.log(`  ${verdict('under-escalated  ', underEscalated.length, BAR.underEscalations, (v, b) => v <= b)}   ${underEscalated.length} (bar ${BAR.underEscalations}) — assigned a LESS severe level than deserved`);
+console.log(`  ${verdict('over-escalation   ', overEscalationRate, BAR.overEscalationRate, (v, b) => v <= b)}  ${pct(overEscalationRate)} (bar ${pct(BAR.overEscalationRate)}) — keeps the tiers meaningful`);
+console.log(`  ${verdict('fabrications     ', fabrications, BAR.fabrications, (v, b) => v <= b)}   ${fabrications} (bar ${BAR.fabrications}) — reaching a coordinator`);
 console.log(`  ${verdict('category accuracy', categoryAccuracy, BAR.categoryAccuracy)}   ${pct(categoryAccuracy)} (bar ${pct(BAR.categoryAccuracy)})`);
+console.log(`        severity exact       ${pct(severityAccuracy)} (not gated: conflates the safe error with the dangerous one)`);
 if (peopleAccuracy !== null) {
   console.log(`        people_affected      ${pct(peopleAccuracy)} over ${peopleChecked.length} cases (not gated)`);
 }
-console.log(`        over-escalated       ${overEscalated.length} Standard cases read as Critical (noise, not a failure)`);
+if (underEscalated.length) {
+  console.log('\n  UNDER-ESCALATED:');
+  for (const r of underEscalated) console.log(`    ${r.id}: expected ${r.expect.severity}, got ${r.got?.severity}`);
+}
 
 // The deterministic backstops in Validate Triage. Every one of these is a case
 // the model got wrong in the dangerous direction and the regex caught.
@@ -278,6 +317,16 @@ const needsReview = results.filter((r) => r.needsReview).length;
 console.log(`        severity floor       ${floorApplied.length} raised to Critical by keyword backstop${floorApplied.length ? ': ' + floorApplied.map((r) => r.id).join(', ') : ''}`);
 console.log(`        injection flagged    ${injectionFlagged.length}${injectionFlagged.length ? ': ' + injectionFlagged.map((r) => r.id).join(', ') : ''}`);
 console.log(`        needs_review         ${needsReview}/${n} rows would reach a human for a second look`);
+
+// The model's own fabrication rate, before the pipeline intervenes. This is the
+// number that tells you whether the model got better; the gated metric above
+// only tells you whether the safeguard held.
+const modelFab = results.filter((r) => r.modelFabricated?.length);
+const fabChecked = results.filter((r) => r.expect.no_fabrication).length;
+console.log(`        model fabrication    ${modelFab.length}/${fabChecked} noise cases where the MODEL invented a detail (safeguard caught it, model unchanged)`);
+if (modelFab.length) {
+  for (const r of modelFab) console.log(`                             ${r.id}: ${r.modelFabricated.join(', ')}`);
+}
 
 if (missedCritical.length) {
   console.log('\n  MISSED CRITICAL — each of these is someone who does not get help:');
@@ -299,8 +348,9 @@ for (const expected of SEVERITIES) {
 const failed =
   schemaViolations > BAR.schemaViolations ||
   criticalRecall < BAR.criticalRecall ||
+  underEscalated.length > BAR.underEscalations ||
+  overEscalationRate > BAR.overEscalationRate ||
   fabrications > BAR.fabrications ||
-  severityAccuracy < BAR.severityAccuracy ||
   categoryAccuracy < BAR.categoryAccuracy;
 
 console.log('\n  ' + (failed ? 'NOT FIT FOR FIELD USE' : 'meets the current bar') + '\n');
@@ -309,7 +359,11 @@ const jsonOut = flag('json');
 if (jsonOut) {
   writeFileSync(jsonOut, JSON.stringify({
     model: results[0]?.model, n,
-    metrics: { schemaViolations, criticalRecall, fabrications, severityAccuracy, categoryAccuracy, peopleAccuracy, overEscalated: overEscalated.length },
+    metrics: {
+      schemaViolations, criticalRecall, fabrications, categoryAccuracy, peopleAccuracy,
+      underEscalated: underEscalated.length, overEscalated: overEscalated.length, overEscalationRate,
+      severityAccuracy, modelFabrications: modelFab.length,
+    },
     bar: BAR, results,
   }, null, 2));
   console.log(`  wrote ${jsonOut}\n`);

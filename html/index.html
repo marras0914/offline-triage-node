@@ -74,7 +74,9 @@
                 // stored. Only an explicit status:received from the workflow's
                 // final node counts as success.
                 if (result.status !== 'received') {
-                    throw new Error(result.message || 'Request was not stored');
+                    var failure = new Error('Request was not stored');
+                    failure.detail = result.message || '';
+                    throw failure;
                 }
 
                 statusDiv.textContent = result.id
@@ -83,7 +85,12 @@
                 statusDiv.style.color = "#16a34a";
                 form.reset();
             } catch (error) {
-                statusDiv.textContent = "NOT SENT. Stay connected to this network and try again. "
+                // Surface the server's own reason when it gave one — an empty
+                // form and a rate-limit shed are both recoverable, and telling
+                // someone to wait is more use than telling them it broke.
+                // textContent, so a server string cannot inject markup.
+                statusDiv.textContent = "NOT SENT. " + (error.detail ? error.detail + " " : "")
+                    + "Stay connected to this network and try again. "
                     + "If this keeps failing, find a triage coordinator in person.";
                 statusDiv.style.color = "#dc2626";
             } finally {
