@@ -28,6 +28,28 @@ services:
     depends_on:
       - n8n
 
+  # Optional, and off unless you ask for it:
+  #   docker compose --profile captive-dns up -d
+  #
+  # For deployments without a router that can hijack DNS — a laptop and a
+  # consumer router, which is what most people will actually have. Answers every
+  # name with the node so captive portal detection fires. Do not run it alongside
+  # a router that already does this.
+  dns:
+    image: coredns/coredns:1.14.7
+    profiles: ["captive-dns"]
+    restart: unless-stopped
+    command: ["-conf", "/etc/coredns/Corefile"]
+    environment:
+      - NODE_IP=${NODE_IP:?set NODE_IP in .env}
+    volumes:
+      - ./dns/Corefile:/etc/coredns/Corefile:ro
+    ports:
+      - "53:53/udp"
+      - "53:53/tcp"
+    networks:
+      - edge_network
+
   ollama:
     image: ollama/ollama:0.32.15
     restart: unless-stopped

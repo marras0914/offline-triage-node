@@ -46,8 +46,9 @@ Measured size, with `llama3.1` 8B:
 | `nocodb/nocodb:2026.08.1` | 846 MB |
 | `postgres:17.11-alpine` | 297 MB |
 | `nginx:1.31.4-alpine` | 63 MB |
+| `coredns/coredns:1.14.7` | 79 MB |
 | `llama3.1:8b` | 4.90 GB |
-| **total** | **~12.6 GB** |
+| **total** | **~12.7 GB** |
 
 **Use a 32GB stick, not 16GB.** The gzipped archive lands well under that, but a stick too full to rebuild a bundle on is a stick that fails you in the field.
 
@@ -113,6 +114,34 @@ Two things worth doing immediately:
 On the guest VLAN's pre-authorization access list, allow unauthenticated traffic to the node's static IP on **port 80 only**. The portal proxies the webhook, so ports 5678 and 8080 do not need to be reachable from the emergency SSID — keep them on the operator network.
 
 Point the captive portal redirect at `http://<NODE_IP>/`. Nginx serves the form for any unmatched path, which is what makes phones open the portal instead of reporting no internet.
+
+### No capable router? Use the built-in DNS
+
+DNS hijacking and pre-authorisation lists are UniFi/MikroTik features. With a consumer router the only thing you can usually configure is **which DNS server DHCP hands out** — which is enough:
+
+```bash
+docker compose --profile captive-dns up -d
+```
+
+Then set the router's DHCP-advertised DNS server to the node's static IP. That is the whole configuration.
+
+The `dns` service answers **every** hostname with the node, so a joining phone asks for `connectivitycheck.gstatic.com` or `captive.apple.com`, reaches this node, gets the SOS form instead of the 204 or success page it expected, concludes it is behind a portal, and opens the form by itself.
+
+Verified end to end against a client using only this node for DNS:
+
+```
+http://captive.apple.com/hotspot-detect.html       HTTP/1.1 200 OK   <title>Emergency Relief Network</title>
+http://connectivitycheck.gstatic.com/generate_204  HTTP/1.1 200 OK   <title>Emergency Relief Network</title>
+http://www.msftconnecttest.com/connecttest.txt     HTTP/1.1 200 OK   <title>Emergency Relief Network</title>
+http://some.random.site/whatever                   HTTP/1.1 200 OK   <title>Emergency Relief Network</title>
+GET /api/sos                                       HTTP/1.1 403 Forbidden
+```
+
+Three things to be clear about:
+
+*   **It is off by default and must stay off if your router already hijacks DNS.** Two things answering DNS is worse than one.
+*   **It resolves everything to the node, including any real internet.** That is the walled garden working, and it means enabling this on a network that still has an uplink breaks that uplink for every client. Only use it when there is nothing upstream.
+*   **Portal detection has not yet been confirmed on real handsets** — that is [#7](https://github.com/marras0914/offline-triage-node/issues/7) and [#23](https://github.com/marras0914/offline-triage-node/issues/23). What is verified is that the DNS and HTTP mechanism behaves the way detection requires.
 
 ## 7. Verifying by Hand
 

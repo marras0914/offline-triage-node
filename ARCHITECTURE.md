@@ -4,7 +4,7 @@ The edge node utilizes a completely isolated, localized stack running within a D
 
 ## 1. Network Layer (The Mesh & Walled Garden)
 *   **Isolated VLAN:** The local router broadcasts an open `EMERGENCY-TEST` SSID assigned to a strict guest VLAN.
-*   **Captive Portal:** The router hijacks DNS probes from connecting devices, forcing them to a local Nginx web server running on the NUC.
+*   **Captive Portal:** The router hijacks DNS probes from connecting devices, forcing them to a local Nginx web server running on the NUC. Where the router cannot do this — a consumer router rather than UniFi/MikroTik — an optional CoreDNS service (`--profile captive-dns`) answers every hostname with the node instead, and the only router setting needed is the DNS server handed out by DHCP.
 *   **Walled Garden:** The router's Pre-Authorization Access list allows unauthenticated traffic to reach **port 80 only** on the NUC's static IP. Ports 5678 (n8n) and 8080 (NocoDB) are operator and coordinator surfaces and stay off the guest VLAN — a survivor's phone never needs them, because Nginx proxies the intake webhook under its own origin.
 
 ## 2. Infrastructure Layer (Docker Compose)

@@ -1,0 +1,41 @@
+# Wildcard DNS, so a captive portal works without a router that can hijack it.
+#
+# The UniFi/MikroTik path does this in the router's pre-authorisation rules. On a
+# consumer router there is no such feature, and the only thing you can usually
+# configure is which DNS server DHCP hands out. So: hand out this node, and
+# answer every name with the node's own address.
+#
+# That is what makes portal detection fire. A phone joining the network asks for
+# connectivitycheck.gstatic.com or captive.apple.com, gets this node, receives
+# the SOS form instead of the 204 or success page it expected, concludes it is
+# behind a portal, and opens the form by itself.
+#
+# Deliberately off by default — `--profile captive-dns` to enable. A capable
+# router already does this, and two things answering DNS is worse than one.
+
+. {
+    # Answers every A query with the node. TTL 0: nothing should cache this, and
+    # a stale answer after the node moves is a device that cannot reach anything.
+    template IN A {
+        answer "{{ .Name }} 0 IN A {$NODE_IP}"
+    }
+
+    # Answer AAAA with an empty NOERROR rather than leaving it unanswered, so a
+    # dual-stack phone stops waiting on IPv6 and falls straight through to the
+    # A record above. Silence here shows up as a slow, apparently broken portal.
+    template IN AAAA {
+        rcode NOERROR
+    }
+
+    # Everything else — TXT, SRV, MX — gets an honest NXDOMAIN instead of a
+    # timeout. There is no internet to reach; say so quickly.
+    template ANY ANY {
+        rcode NXDOMAIN
+    }
+
+    # Locally visible only. There is no upstream to forward to, which is the
+    # point, but it means every lookup lands here and the log is the only way to
+    # tell "nobody joined" from "DNS is not being used".
+    log
+    errors
+}

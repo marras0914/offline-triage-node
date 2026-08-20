@@ -80,7 +80,7 @@ A laptop is a battery-backed server with a screen and a keyboard attached, which
 Both are real gaps, tracked rather than glossed:
 
 1.  **You cannot download anything during a blackout** ([#21](https://github.com/marras0914/offline-triage-node/issues/21)). `install.sh` currently pulls five images and a multi-GB model from the internet. Until an offline bundle exists, the node has to be built *before* it is needed — which quietly means the blueprint only helps people who predicted the emergency.
-2.  **The captive portal assumes a capable router** ([#22](https://github.com/marras0914/offline-triage-node/issues/22)). DNS hijacking and the walled garden are UniFi/MikroTik features. On a laptop hotspot there is nothing to make a phone pop the form open, and telling people an IP address by voice does not scale past the people next to you.
+2.  **A laptop hotspot still cannot serve a captive portal** ([#22](https://github.com/marras0914/offline-triage-node/issues/22)). The *router* half of this is now solved: `docker compose --profile captive-dns up -d` answers every hostname with the node, so a plain consumer router works — set its DHCP-advertised DNS to the node and detection fires. What remains is the laptop's own hotspot, where binding port 80 and controlling DNS both need privileges the OS does not hand out, and where client limits are typically around eight devices.
 
 ## Documentation
 
