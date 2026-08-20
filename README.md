@@ -76,6 +76,14 @@ Both are real gaps, tracked rather than glossed:
 1.  **You cannot download anything during a blackout** ([#21](https://github.com/marras0914/offline-triage-node/issues/21)). `install.sh` currently pulls five images and a multi-GB model from the internet. Until an offline bundle exists, the node has to be built *before* it is needed — which quietly means the blueprint only helps people who predicted the emergency.
 2.  **The captive portal assumes a capable router** ([#22](https://github.com/marras0914/offline-triage-node/issues/22)). DNS hijacking and the walled garden are UniFi/MikroTik features. On a laptop hotspot there is nothing to make a phone pop the form open, and telling people an IP address by voice does not scale past the people next to you.
 
+## Documentation
+
+*   **[DEPLOYMENT.md](DEPLOYMENT.md)** — installing, including with no internet
+*   **[OPERATIONS.md](OPERATIONS.md)** — running it: who watches the queue, the four checks, backups, handover
+*   **[ARCHITECTURE.md](ARCHITECTURE.md)** — the stack, the data flow, and the deterministic safety backstops
+*   **[eval/README.md](eval/README.md)** — the triage regression suite and what it does and does not prove
+*   **[CONTRIBUTING.md](CONTRIBUTING.md)** — where help is needed
+
 ## Roadmap
 
 Four phases from local proof-of-concept to deployable field unit. Each phase is a [milestone](https://github.com/marras0914/offline-triage-node/milestones); progress is tracked on the [roadmap board](https://github.com/users/marras0914/projects/2).
@@ -94,7 +102,7 @@ Partially verified already, on a dev box rather than target hardware: the schema
 Also in this phase, from review rather than the original plan:
 
 - [ ] [Pin all image tags](https://github.com/marras0914/offline-triage-node/issues/17) — a rebuild mid-incident must not pull a release that changes node behaviour
-- [ ] [Coordinator runbook](https://github.com/marras0914/offline-triage-node/issues/18) — the `needs_review` queue currently has no human assigned to watch it
+- [x] [Coordinator runbook](https://github.com/marras0914/offline-triage-node/issues/18) — [OPERATIONS.md](OPERATIONS.md), plus the `review_pile` / `queue_health` views and an audit trail so "nobody looked" is visible rather than silent
 - [ ] [Rate limiting](https://github.com/marras0914/offline-triage-node/issues/19) — `/api/sos` is unauthenticated by design, but uncapped
 
 ### Phase 2 — Network Isolation & Captive Portal

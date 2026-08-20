@@ -161,6 +161,42 @@ CREATE TRIGGER requests_link_repeats
     BEFORE INSERT ON requests
     FOR EACH ROW EXECUTE FUNCTION link_repeat_submissions();
 
+-- Defined before the views below, which both call them.
+--
+-- How long a request may sit unacknowledged before someone has lost track of it.
+-- Provisional numbers, to be reset from real deployments — but a stated wrong
+-- number is auditable and an unstated one is not.
+CREATE OR REPLACE FUNCTION triage_ack_deadline(sev TEXT)
+RETURNS interval LANGUAGE sql IMMUTABLE AS $$
+    SELECT CASE sev
+        WHEN 'Critical' THEN interval '15 minutes'
+        WHEN 'Urgent'   THEN interval '1 hour'
+        ELSE                 interval '4 hours'
+    END;
+$$;
+
+-- Why a row is in the review pile, bucketed. The pile is not homogeneous and the
+-- buckets need different human responses — some are a problem with the request,
+-- others mean the node itself is broken.
+CREATE OR REPLACE FUNCTION triage_review_reason(err TEXT)
+RETURNS TEXT LANGUAGE sql IMMUTABLE AS $$
+    SELECT CASE
+        WHEN err IS NULL                              THEN NULL
+        WHEN err ILIKE '%instruction injection%'      THEN 'Suspected injection'
+        WHEN err ILIKE '%severity floor applied%'     THEN 'Floor overrode triage'
+        WHEN err ILIKE '%no triageable detail%'       THEN 'No detail given'
+        WHEN err ILIKE '%with no basis in%'           THEN 'Fabricated summary'
+        WHEN err ILIKE '%incomplete submission%'      THEN 'Incomplete submission'
+        WHEN err ILIKE '%unrecognised%'               THEN 'Unrecognised value'
+        WHEN err ILIKE '%getaddrinfo%'
+          OR err ILIKE '%ECONN%'
+          OR err ILIKE '%timeout%'
+          OR err ILIKE '%no message content%'
+          OR err ILIKE '%Ollama%'                     THEN 'Model unavailable'
+        ELSE                                               'Other'
+    END;
+$$;
+
 -- What a coordinator should have open on screen. Sorted by real-world urgency,
 -- which is not alphabetical order on the severity column.
 CREATE OR REPLACE VIEW active_queue AS
@@ -182,13 +218,123 @@ SELECT
     (SELECT count(*) FROM requests other
       WHERE other.dedupe_key = requests.dedupe_key
         AND other.dedupe_key IS NOT NULL
-        AND other.id <> requests.id) AS other_submissions
+        AND other.id <> requests.id) AS other_submissions,
+    round(extract(epoch FROM (now() - received_at)) / 60)::int AS minutes_open,
+    -- TRUE means this has waited longer than its severity allows and nobody has
+    -- acknowledged it. Not an alarm by itself; something has to be watching.
+    (status = 'New' AND now() - received_at > triage_ack_deadline(severity)) AS past_deadline
 FROM requests
 WHERE status IN ('New', 'Acknowledged', 'Dispatched')
 ORDER BY
     CASE severity WHEN 'Critical' THEN 0 WHEN 'Urgent' THEN 1 ELSE 2 END,
     needs_review DESC,
     received_at;
+
+-- Coordinator instrumentation -----------------------------------------------
+--
+-- The pipeline escalates and flags diligently. None of that is worth anything
+-- unless a human reads the result, and "someone should watch the queue" is not a
+-- procedure. These views exist so each check in OPERATIONS.md is one glance, and
+-- so "nobody looked" becomes visible instead of silent.
+
+-- The review pile, triageable. Ordered so the reasons a human must read
+-- personally come before the ones that are only a missing classification.
+CREATE OR REPLACE VIEW review_pile AS
+SELECT
+    r.id,
+    r.received_at,
+    round(extract(epoch FROM (now() - r.received_at)) / 60)::int AS minutes_open,
+    triage_review_reason(r.triage_error) AS reason,
+    r.severity,
+    r.category,
+    r.status,
+    r.assigned_to,
+    r.reporter_name,
+    r.location_text,
+    -- Deliberately last and deliberately present: for several of these reasons
+    -- the summary is exactly what must not be trusted.
+    r.summary,
+    r.raw_message,
+    r.triage_error
+FROM requests r
+WHERE r.needs_review
+  AND r.status IN ('New', 'Acknowledged', 'Dispatched')
+ORDER BY
+    CASE triage_review_reason(r.triage_error)
+        WHEN 'Suspected injection'   THEN 0
+        WHEN 'Fabricated summary'    THEN 1
+        WHEN 'No detail given'       THEN 2
+        WHEN 'Floor overrode triage' THEN 3
+        WHEN 'Incomplete submission' THEN 4
+        WHEN 'Unrecognised value'    THEN 5
+        WHEN 'Model unavailable'     THEN 6
+        ELSE 7
+    END,
+    r.received_at;
+
+-- One row. What a shift lead looks at to answer "is this node keeping up, and is
+-- anyone actually working the queue".
+CREATE OR REPLACE VIEW queue_health AS
+SELECT
+    count(*) FILTER (WHERE status = 'New')                                    AS unacknowledged,
+    count(*) FILTER (WHERE status = 'New' AND severity = 'Critical')          AS unacknowledged_critical,
+    count(*) FILTER (WHERE status = 'New'
+                       AND now() - received_at > triage_ack_deadline(severity)) AS past_deadline,
+    count(*) FILTER (WHERE status = 'New' AND severity = 'Critical'
+                       AND now() - received_at > triage_ack_deadline('Critical')) AS critical_past_deadline,
+    count(*) FILTER (WHERE needs_review AND status <> 'Resolved')             AS needs_review_open,
+    count(*) FILTER (WHERE status = 'Dispatched')                             AS dispatched_open,
+    count(*) FILTER (WHERE status IN ('New','Acknowledged','Dispatched'))     AS total_open,
+    -- If this is climbing, the node is broken and the answer is to fix Ollama,
+    -- not to hand-triage a hundred rows.
+    count(*) FILTER (WHERE triage_review_reason(triage_error) = 'Model unavailable'
+                       AND received_at > now() - interval '1 hour')           AS model_failures_last_hour,
+    count(*) FILTER (WHERE triage_review_reason(triage_error) = 'Suspected injection'
+                       AND received_at > now() - interval '1 hour')           AS injections_last_hour,
+    max(round(extract(epoch FROM (now() - received_at)) / 60)::int)
+        FILTER (WHERE status = 'New')                                         AS oldest_unacknowledged_min,
+    count(*) FILTER (WHERE received_at > now() - interval '1 hour')           AS arrived_last_hour
+FROM requests;
+
+-- Status changes, so "did anyone look at this" has an answer after the fact.
+--
+-- Note what this can and cannot tell you: db_user is the database role, which is
+-- the same for every coordinator working through NocoDB. It identifies the
+-- system, not the person. Attribution to a human depends on coordinators setting
+-- assigned_to, which is a discipline, not a guarantee.
+CREATE TABLE IF NOT EXISTS request_events (
+    id          BIGSERIAL PRIMARY KEY,
+    request_id  BIGINT NOT NULL REFERENCES requests(id) ON DELETE CASCADE,
+    at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    field       TEXT NOT NULL,
+    old_value   TEXT,
+    new_value   TEXT,
+    assigned_to TEXT,
+    db_user     TEXT NOT NULL DEFAULT current_user
+);
+
+CREATE INDEX IF NOT EXISTS request_events_request_idx ON request_events (request_id, at);
+CREATE INDEX IF NOT EXISTS request_events_at_idx      ON request_events (at DESC);
+
+CREATE OR REPLACE FUNCTION record_request_event() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.status IS DISTINCT FROM OLD.status THEN
+        INSERT INTO request_events (request_id, field, old_value, new_value, assigned_to)
+        VALUES (NEW.id, 'status', OLD.status, NEW.status, NEW.assigned_to);
+    END IF;
+    IF NEW.assigned_to IS DISTINCT FROM OLD.assigned_to THEN
+        INSERT INTO request_events (request_id, field, old_value, new_value, assigned_to)
+        VALUES (NEW.id, 'assigned_to', OLD.assigned_to, NEW.assigned_to, NEW.assigned_to);
+    END IF;
+    RETURN NULL;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS requests_record_events ON requests;
+CREATE TRIGGER requests_record_events
+    AFTER UPDATE ON requests
+    FOR EACH ROW EXECUTE FUNCTION record_request_event();
 
 COMMENT ON TABLE  requests            IS 'Every SOS submission from the captive portal, raw intake plus AI triage.';
 COMMENT ON COLUMN requests.needs_review IS 'TRUE when triage failed or returned an unusable value; severity defaulted upward.';

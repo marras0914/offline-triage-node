@@ -105,6 +105,7 @@ Two things worth doing immediately:
 
 *   Open the **`active_queue`** view. It is ordered by real urgency (Critical → Urgent → Standard, review-flagged first, then oldest) rather than by insertion order.
 *   Filter on **`needs_review = true`** to find requests the model could not classify. These were escalated to Critical automatically and have not been read by anything but a human yet.
+*   Add views for **`review_pile`** (the flagged rows, bucketed by why and ordered so the ones needing a human read come first) and **`queue_health`** (one row: unacknowledged Criticals, anything past deadline, whether the model is failing). These are what the checks in [OPERATIONS.md](OPERATIONS.md) actually run against.
 *   Note **`other_submissions`** and **`duplicate_of`**. A non-zero count means this reporter has sent more than once, and later messages are usually escalations rather than noise — read the cluster together before dispatching. Repeats are deliberately left in the queue; if you judge one genuinely redundant, set its `status` to `Duplicate` yourself.
 
 ## 6. Router / Walled Garden
@@ -133,5 +134,6 @@ That message should come back `Critical` / `Structural`. If it comes back `needs
 
 *   **Changing model:** edit the `DEFAULT_MODEL` constant in `n8n/workflows/sos-intake-triage.json`, then re-run `./install.sh`, which reads that line and pulls the matching model. It is deliberately *not* an environment variable: n8n 2.x denies Code nodes access to env and throws when they touch `$env`, which failed every request at the first node until it was found. Re-run `./eval/run-eval.sh` after any model change — the pass bar exists for exactly this.
 *   **No internet at all:** stage an offline bundle first (§2). `install.sh` loads from it and never reaches for the network.
-*   **Backups:** the field data is one database. `docker compose exec -T postgres pg_dump -U triage_admin triage > triage-$(date +%F).sql` onto removable media.
+*   **Backups:** `./scripts/backup.sh /media/usb`. It verifies the dump contains the `requests` table and data before reporting success, and copies `.env` alongside it. Once per shift and before any `install.sh` re-run — see [OPERATIONS.md](OPERATIONS.md).
+*   **Running the node day to day:** [OPERATIONS.md](OPERATIONS.md) — who watches the queue, the four checks and their cadence, what each review reason means, and how to tell a busy node from a broken one.
 *   **`N8N_ENCRYPTION_KEY` is load-bearing.** If it changes, n8n can no longer decrypt the Triage Postgres credential and the workflow stops writing. Back `.env` up with the database.
