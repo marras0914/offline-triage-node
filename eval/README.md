@@ -68,10 +68,10 @@ so it is measured before validation. Reported alongside, ungated: how many rows
 the floor raised, how many were flagged as injection, and how many would reach a
 human via `needs_review`.
 
-**Critical recall and over-escalation are not comparable errors.** A Standard
-request read as Critical is noise in a coordinator's queue. A Critical request
-read as Standard is someone waiting behind blankets. The bar is asymmetric on
-purpose, and over-escalation is reported but never gated.
+**The two directions are not comparable errors.** A Standard request read as
+Critical is noise in a coordinator's queue. A Critical request read as Standard is
+someone waiting behind blankets. The bars are asymmetric on purpose: zero
+tolerance one way, a quarter of all traffic the other.
 
 ## Fabrication check
 
@@ -133,53 +133,59 @@ intake, and prompt injection — intake is a public, unauthenticated endpoint, s
 `inject-*` cases check that instructions in the message body cannot override the
 rubric.
 
-## Baseline
+## Results
 
-First full run, `llama3.2:1b`, 42 cases. **1B is not the deployment model** — it was
-chosen because a small model is a harsher test of whether `format` really
-constrains decoding. Re-run on `llama3.1` 8B before reading anything here as
-settled (issue #2).
+All on the same 53 cases, on a laptop CPU with no GPU. `llama3.1:8b` is the
+deployment target; the smaller models are here because they are what an 8GB or
+4GB machine can actually run.
 
-| metric | baseline (42 cases) | with backstops (53 cases) | bar |
-| --- | --- | --- | --- |
-| schema violations | **0** | **0** | 0 |
-| critical recall | 83.3% over 18 | **100% over 29** | 100% |
-| under-escalated | — | **0** | 0 |
-| over-escalation rate | — | 26.4% | ≤25% |
-| fabrications reaching a coordinator | 3 | **0** | 0 |
-| model's own fabrication | 3/3 | 3/3 | ungated |
-| category accuracy | 88.1% | **84.9%** | 80% |
-| severity exact | 64.3% | 73.6% | ungated |
-| people_affected | 73.3% | 92.7% | ungated |
+| metric | `1b` | `3b` | **`8b`** | bar |
+| --- | --- | --- | --- | --- |
+| schema violations | 0 | 0 | **0** | 0 |
+| critical recall | 100% | 96.6% | **100%** | 100% |
+| under-escalated | 0 | 1 | **0** | 0 |
+| over-escalation | 26.4% | 7.5% | **1.9%** | ≤25% |
+| fabrications reaching a coordinator | 0 | 0 | **0** | 0 |
+| category accuracy | 84.9% | 92.5% | **98.1%** | 80% |
+| severity exact | 73.6% | 90.6% | **98.1%** | ungated |
+| people_affected | 92.7% | 97.6% | **100%** | ungated |
+| model's own fabrication | 3/3 | 2/3 | 2/3 | ungated |
+| p50 latency | 4.8s | 6.7s | 13.4s | ungated |
+| | fails | fails | **meets the bar** | |
 
-The second column adds the deterministic backstops and prompt fencing from issues
-#20 and #10, plus eleven `floor-*` cases, so the recall bar is tested against 29
-Critical cases rather than 18. What this settles and what it does not:
+`8b` is the first configuration to pass every gate. Its severity confusion matrix
+is a clean diagonal apart from one Standard read as Urgent: 29/29 Critical, 13/13
+Urgent, 10/11 Standard.
 
-1. **Prompt injection is fixed.** Before: all three `inject-*` cases downgraded
-   to Standard, and every missed Critical was an injection (15/15 on legitimate
-   messages, 0/3 on injections). After: 18/18 Critical, with all three flagged
-   and the floor raising `inject-01` outright. The fix is regex, so this result
-   does not depend on the model — but the pattern lists are not exhaustive, and
-   a Critical indicator outside the floor's vocabulary ("choking") is still
-   reachable. Issue #20 stays open for coverage.
-2. **Urgent is still never used, and it is now the only failing metric.** All 13
-   Urgent cases come back Critical, so the three-level scale behaves as two and
-   the queue has lost a tier. That is what the 26.4% over-escalation figure is
-   measuring — not a safety problem, an ordering one. Unchanged by any of the
-   prompt work and the most likely small-model artifact here; re-test at 8B
-   before drawing conclusions.
-3. **Fabrication no longer reaches a coordinator, but the model has not
-   improved.** All three noise cases still invent a clinical detail — `"help"`
-   alone yields *"life threatening injury requiring medical attention"* — and the
-   0 in the gated row is the Validate Triage safeguard holding, not the model
-   behaving. Those two numbers are reported separately for exactly this reason.
-4. **Category accuracy moved 88.1% → 84.9%** across prompt changes while
-   `people_affected` rose 73.3% → 92.7%. Small swings at this n on a 1B model;
-   treat both as unexplained until the 8B run.
+### Read this before trusting that
 
-Schema adherence is the one thing confirmed outright, twice: `format` constrains
-decoding rather than merely requesting JSON.
+1. **The floor was grown from these failures.** An earlier 8B run under-escalated
+   `crit-str-03` ("water up to my chest ... door is stuck") and `crit-str-05`
+   ("strong gas smell ... my three kids are in here"), both Critical. Those
+   patterns were then added to the floor. It now covers all 29 Critical cases
+   deterministically with zero false positives on Standard or Urgent — but
+   partly *because it was fitted to them*. This suite is a regression guard
+   against losing that coverage, not evidence the vocabulary generalises. Only
+   real intake tests that.
+2. **A better model made recall worse before the floor caught up.** Before those
+   patterns: 1B scored 100% recall, 8B scored 82.8%. The weak model blankets
+   everything Critical so it never misses one, and its queue is worthless. See
+   [ARCHITECTURE.md](../ARCHITECTURE.md#why-the-floor-matters-more-as-the-model-gets-better)
+   — this is why the floor is not scaffolding to remove later.
+3. **The model still fabricates; the pipeline catches it.** 2/3 noise cases
+   invent a clinical detail at 8B, including *"experiencing severe chest pain and
+   difficulty breathing"* from bare punctuation. The gated 0 is the safeguard
+   holding, not the model behaving. That is why both numbers are reported.
+4. **11 of 53 rows land in `needs_review`** at 8B, up from 7 — the floor raising
+   a row means the model disagreed with it, which is exactly when a human should
+   look. Roughly a fifth of intake going to manual review is workable, but it
+   presumes someone is watching that queue (#18).
+5. **1B satisfies the schema contract perfectly and fails the job.** Zero schema
+   violations, and every tier collapsed into Critical. Passing a format contract
+   says nothing about being fit to sort a queue.
+
+Schema adherence is the one thing confirmed outright at every size: `format`
+constrains decoding rather than merely requesting JSON.
 
 ## Adding cases
 

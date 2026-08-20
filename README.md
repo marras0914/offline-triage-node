@@ -35,8 +35,8 @@ The list above is a target, not a gate. A blueprint for the hours after infrastr
 | What you have | Model | What you get |
 | --- | --- | --- |
 | Prepositioned NUC, 32GB, iGPU | `llama3.1` 8B | The full design |
-| Any modern laptop, 16GB+, no GPU | `llama3.1` 8B on CPU | Full triage, slower per request |
-| Older laptop, 8GB | `llama3.2:3b` or `phi3` | Triage with measurably worse severity sorting |
+| Any modern laptop, 16GB+, no GPU | `llama3.1` 8B on CPU | Full triage, ~13s per request (measured) |
+| Older laptop, 8GB | `llama3.2:3b` | Triage with 9/13 rather than 13/13 on the Urgent tier |
 | 4GB, a Raspberry Pi, or no model at all | none | **Intake and dashboard, no AI** — see below |
 
 Storage is not the constraint the spec implies: images and an 8B model come to roughly 13GB, so any disk with 20GB free will do.
@@ -45,14 +45,17 @@ Storage is not the constraint the spec implies: images and an 8B model come to r
 
 Not estimates. This project's own [eval suite](eval/) run on an MSI Commercial 14 (i7-13700H, 32GB) under Docker Desktop on Windows, which gives Ollama **no GPU access at all** — so this is close to the realistic worst case for a machine of that class.
 
-| Model | p50 | p90 | Severity sorting |
-| --- | --- | --- | --- |
-| `llama3.2:1b` | 4.8s | 7.7s | Unusable — collapses every tier into Critical |
-| `llama3.2:3b` | 6.7s | 10.3s | Good: 9/13 Urgent correctly Urgent, 92.5% category |
+| Model | RAM | p50 | p90 | Worst | Queue ordering |
+| --- | --- | --- | --- | --- | --- |
+| `llama3.2:1b` | ~2GB | 4.8s | 7.7s | 15s | **Worthless** — every tier collapses to Critical |
+| `llama3.2:3b` | ~4GB | 6.7s | 10.3s | 55s | Good — 9/13 Urgent correct, 92.5% category |
+| `llama3.1:8b` | ~8GB | 13.4s | 19.5s | 136s | Best — 13/13 Urgent correct, 98.1% category |
 
-The gap between 1B and 3B is not subtle, and it is the difference between a queue that sorts and a queue where everything is Critical. **1B is small enough to run anywhere and not worth running** — it passes the schema contract and fails at the actual job. Do not go below 3B.
+**Do not go below 3B.** 1B runs anywhere and is not worth running: it satisfies the JSON schema contract perfectly and fails at the actual job, marking everything Critical. A queue where every row is the top priority is a queue you have to read end to end, which is the thing this system exists to avoid.
 
-Latency is comfortable either way: a person is filling in a form, and the request is stored before anyone waits on inference. The nginx proxy allows 300s and the n8n node 180s, so there is a lot of headroom. Throughput is the real limit, because Ollama serialises — see the concurrency caps in `nginx/default.conf`.
+**8B is comfortable on a laptop CPU.** 13s median for a form submission is unnoticeable to someone typing, and the request is stored regardless — nobody's request depends on inference finishing. The nginx proxy allows 300s and the n8n node 180s, so even the 136s worst case fits.
+
+Throughput is the real limit, not latency. Ollama serialises requests, so at ~13s each a single node handles roughly four or five submissions a minute before a queue forms; the concurrency caps in `nginx/default.conf` shed load rather than letting fifty people each wait behind it. If that ceiling matters for your population, that is the argument for the prepositioned build's iGPU — not the latency.
 
 ### The no-AI tier is real, not a consolation prize
 

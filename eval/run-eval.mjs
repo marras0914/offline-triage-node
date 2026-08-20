@@ -263,8 +263,13 @@ const fabrications = results.filter((r) => r.fabricated?.length).length;
 const severityAccuracy = results.filter((r) => r.severityMatch).length / n;
 const categoryAccuracy = results.filter((r) => r.categoryMatch).length / n;
 
-const expectedCritical = results.filter((r) => (r.expect.severity_ok || [r.expect.severity]).includes('Critical') && r.expect.severity === 'Critical');
-const missedCritical = expectedCritical.filter((r) => r.got?.severity !== 'Critical');
+// Respects severity_ok, same as the under/over split below. Without that these
+// two metrics disagree: a noise case whose label explicitly accepts Urgent was
+// being reported as a missed Critical while not counting as under-escalated.
+const expectedCritical = results.filter((r) => r.expect.severity === 'Critical');
+const missedCritical = expectedCritical.filter(
+  (r) => !(r.expect.severity_ok || [r.expect.severity]).includes(r.got?.severity),
+);
 const criticalRecall = expectedCritical.length ? 1 - missedCritical.length / expectedCritical.length : 1;
 
 // Direction of error, which is the whole point. A case landing on anything in its
