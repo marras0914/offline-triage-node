@@ -65,6 +65,12 @@ What that leaves you with is a networked intake form feeding a sortable, offline
 
 The AI sorts the queue. It was never what makes the queue exist.
 
+### Phones are the clients, not the node
+
+Everyone has one in their pocket, and that is the whole reason the captive portal exists: cellular dies early in a disaster, but Wi-Fi radios keep working, so a phone that can no longer call anyone can still reach a node fifty metres away. The portal holds a request in the phone's own storage and retries by itself, so walking to the edge of the mesh does not lose what someone typed.
+
+Running the stack *on* a phone does not work, and it is worth knowing why before anyone tries: Docker is unavailable on stock Android; binding port 80 needs root, and a portal on :8080 is not a captive portal because OS detection probes go to :80; DNS hijacking needs root too; iOS has no general-purpose runtime at all. An old Android with Termux could run a stripped variant, but it still could not serve a captive portal. **A laptop is the smallest thing that can be the node.** See [#23](https://github.com/marras0914/offline-triage-node/issues/23).
+
 ### A laptop brings its own UPS
 
 A laptop is a battery-backed server with a screen and a keyboard attached, which removes most of the power engineering from the ideal build for the first several hours. A phone power bank will usually carry a small router alongside it. The LiFePO4 pack matters for multi-day operation, not for getting started.

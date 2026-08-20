@@ -1,10 +1,22 @@
 # Values come from .env, which install.sh creates (and generates secrets into)
 # on first run. The `:?` guards fail the stack fast rather than booting a node
 # with an empty database password.
+#
+# Every image is pinned to an exact patch version, and none of them is `latest`.
+# This is not tidiness. An offline bundle is a set of exact versions by
+# definition, and a rebuild during an incident must not pull a release that
+# changes node behaviour. Two things have already gone wrong here: n8n 2.x
+# started denying Code nodes access to $env, which failed every request at the
+# first node; and a stale `ollama/ollama:latest` sat in a local cache at 0.19.0
+# while the current release was 0.32.15, so benchmarks ran against a version
+# nobody had chosen.
+#
+# Bumping any of these is a deliberate act: change the tag, re-run
+# ./db/test-schema.sh and ./eval/run-eval.sh, then rebuild the bundle.
 
 services:
   portal:
-    image: nginx:alpine
+    image: nginx:1.31.4-alpine
     restart: unless-stopped
     ports:
       - "80:80"
@@ -17,7 +29,7 @@ services:
       - n8n
 
   ollama:
-    image: ollama/ollama:latest
+    image: ollama/ollama:0.32.15
     restart: unless-stopped
     # Deliberately not published to the host: the model is reachable only over
     # internal Docker DNS, so nothing on the open guest VLAN can drive it.
@@ -28,7 +40,7 @@ services:
 
   postgres:
     # n8n 2.x warns that 16 is outside its supported range.
-    image: postgres:17-alpine
+    image: postgres:17.11-alpine
     restart: unless-stopped
     environment:
       - POSTGRES_USER=triage_admin
@@ -48,7 +60,7 @@ services:
       - edge_network
 
   nocodb:
-    image: nocodb/nocodb:latest
+    image: nocodb/nocodb:2026.08.1
     restart: unless-stopped
     ports:
       - "8080:8080"
@@ -68,9 +80,7 @@ services:
         condition: service_healthy
 
   n8n:
-    # Pinned, not :latest. This is the version the workflow is verified against,
-    # and a field rebuild must not silently pull a release that changes node
-    # behaviour — n8n 2.x already broke $env access inside Code nodes once.
+    # The version the workflow and the eval suite are verified against.
     image: docker.n8n.io/n8nio/n8n:2.35.4
     restart: unless-stopped
     ports:

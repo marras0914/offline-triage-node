@@ -41,20 +41,20 @@ Measured size, with `llama3.1` 8B:
 
 | | uncompressed |
 | --- | --- |
-| `ollama/ollama` | 6.04 GB |
-| `n8n` | 1.44 GB |
-| `postgres:17-alpine` | 297 MB |
-| `nginx:alpine` | 62 MB |
-| `nocodb` | ~500 MB |
+| `ollama/ollama:0.32.15` | 5.04 GB |
+| `docker.n8n.io/n8nio/n8n:2.35.4` | 1.44 GB |
+| `nocodb/nocodb:2026.08.1` | 846 MB |
+| `postgres:17.11-alpine` | 297 MB |
+| `nginx:1.31.4-alpine` | 63 MB |
 | `llama3.1:8b` | 4.90 GB |
-| **total** | **~13 GB** |
+| **total** | **~12.6 GB** |
 
 **Use a 32GB stick, not 16GB.** The gzipped archive lands well under that, but a stick too full to rebuild a bundle on is a stick that fails you in the field.
 
 Two things to know:
 
 *   **Rebuild it when the pinned versions change.** A bundle with a stale image set is a bundle that fails on the day it is needed. This is a periodic chore and it needs an owner.
-*   **The Ollama image is 6GB because it ships CUDA and ROCm libraries.** On the laptop path, where Docker gives Ollama no GPU access at all, that is roughly 5GB of dead weight on the media. Tracked in [#21](https://github.com/marras0914/offline-triage-node/issues/21).
+*   **The Ollama image is 5GB because it ships CUDA and ROCm libraries.** On the laptop path, where Docker gives Ollama no GPU access at all, that is dead weight on the media. Tracked in [#21](https://github.com/marras0914/offline-triage-node/issues/21).
 
 The air-gapped install has not yet been verified end to end — that test is [#21](https://github.com/marras0914/offline-triage-node/issues/21).
 

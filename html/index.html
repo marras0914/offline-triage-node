@@ -42,69 +42,140 @@
         var button = form.querySelector('button');
         var statusDiv = document.getElementById('statusMessage');
 
-        form.addEventListener('submit', async (e) => {
+        var AMBER = "#d97706", GREEN = "#16a34a", RED = "#dc2626";
+        function show(text, colour) { statusDiv.textContent = text; statusDiv.style.color = colour; }
+
+        // The phone holds the request until the node confirms it.
+        //
+        // Almost everyone arrives here with a phone, at the edge of a mesh, while
+        // moving. Losing the network mid-submit used to lose what they typed and
+        // tell them to try again — asking a frightened person to retype an
+        // emergency. The phone is a perfectly good place to keep it meanwhile.
+        var PENDING = 'triage.pending';
+        function loadPending() {
+            try { return JSON.parse(localStorage.getItem(PENDING) || 'null'); } catch (e) { return null; }
+        }
+        function savePending(p) {
+            // Private browsing can refuse this. Nothing to be done, and it must
+            // not stop the send attempt itself.
+            try { localStorage.setItem(PENDING, JSON.stringify(p)); } catch (e) {}
+        }
+        function clearPending() { try { localStorage.removeItem(PENDING); } catch (e) {} }
+
+        async function send(payload) {
+            var response;
+            try {
+                // Same-origin: nginx proxies this to the n8n webhook, so there is
+                // no CORS preflight and no node IP to substitute into this file.
+                response = await fetch('/api/sos', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+            } catch (networkError) {
+                var offline = new Error('no answer from the node');
+                offline.retryable = true;
+                throw offline;
+            }
+
+            var result = await response.json().catch(function () { return {}; });
+
+            // A crashed n8n execution answers 200 with an empty body, so
+            // response.ok alone would show "help is coming" when nothing was
+            // stored. Only an explicit status:received from the workflow's final
+            // node counts as success.
+            if (result.status !== 'received') {
+                var failure = new Error('request was not stored');
+                failure.detail = result.message || '';
+                // 400 means the submission itself was refused, and resending the
+                // same content would only be refused again. Everything else — a
+                // rate-limit shed, a restarting node — is worth retrying.
+                failure.retryable = response.status !== 400;
+                throw failure;
+            }
+            return result;
+        }
+
+        // 15s, chosen to stay under the node's per-device rate limit of 10/min.
+        // A tighter loop would trip its own shedding and retry against a 429
+        // forever.
+        var RETRY_MS = 15000;
+        var retryTimer = null;
+        function stopRetrying() { if (retryTimer) { clearInterval(retryTimer); retryTimer = null; } }
+        function startRetrying() {
+            if (retryTimer) return;
+            // Safe to retry because the node suppresses a byte-identical repeat
+            // inside ten minutes, so a retry cannot pile duplicates into a
+            // coordinator's queue.
+            retryTimer = setInterval(async function () {
+                var pending = loadPending();
+                if (!pending) { stopRetrying(); return; }
+                try { reportSuccess(await send(pending.payload)); }
+                catch (e) { if (!e.retryable) { clearPending(); stopRetrying(); } }
+            }, RETRY_MS);
+        }
+
+        function reportSuccess(result) {
+            clearPending();
+            stopRetrying();
+            if (result.already_logged) {
+                // An identical message inside ten minutes is recorded against the
+                // request already in the queue. Saying so is more honest than
+                // implying a second request now exists.
+                show("We already have this request. It is in the queue"
+                    + (result.id ? " (#" + result.id + ")" : "") + " and help is being routed.", GREEN);
+            } else {
+                show(result.id
+                    ? "Request #" + result.id + " received. Help is being routed."
+                    : "Request received. Help is being routed.", GREEN);
+            }
+            form.reset();
+        }
+
+        form.addEventListener('submit', async function (e) {
             e.preventDefault();
 
             // Held down until the request settles. A slow local model means
             // several seconds of nothing happening, which is exactly when a
             // frightened person taps the button again.
             button.disabled = true;
-            statusDiv.textContent = "Sending... keep this page open.";
-            statusDiv.style.color = "#d97706";
+            show("Sending... keep this page open.", AMBER);
 
-            const payload = {
+            var payload = {
                 name: document.getElementById('name').value,
                 location: document.getElementById('location').value,
                 message: document.getElementById('message').value
             };
+            // Written down before the first attempt, so losing the network
+            // mid-send cannot lose what the person typed.
+            savePending({ payload: payload, at: Date.now() });
 
             try {
-                // Same-origin: nginx proxies this to the n8n webhook, so there is
-                // no CORS preflight and no node IP to substitute into this file.
-                const response = await fetch('/api/sos', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-
-                const result = await response.json().catch(() => ({}));
-
-                // A crashed n8n execution answers 200 with an empty body, so
-                // response.ok alone would show "help is coming" when nothing was
-                // stored. Only an explicit status:received from the workflow's
-                // final node counts as success.
-                if (result.status !== 'received') {
-                    var failure = new Error('Request was not stored');
-                    failure.detail = result.message || '';
-                    throw failure;
-                }
-
-                // An identical message inside ten minutes is recorded against the
-                // request already in the queue. Saying so is more honest than
-                // implying a second request now exists.
-                if (result.already_logged) {
-                    statusDiv.textContent = "We already have this request. It is in the queue"
-                        + (result.id ? " (#" + result.id + ")" : "") + " and help is being routed.";
-                } else {
-                    statusDiv.textContent = result.id
-                        ? "Request #" + result.id + " received. Help is being routed."
-                        : "Request received. Help is being routed.";
-                }
-                statusDiv.style.color = "#16a34a";
-                form.reset();
+                reportSuccess(await send(payload));
             } catch (error) {
-                // Surface the server's own reason when it gave one — an empty
-                // form and a rate-limit shed are both recoverable, and telling
-                // someone to wait is more use than telling them it broke.
-                // textContent, so a server string cannot inject markup.
-                statusDiv.textContent = "NOT SENT. " + (error.detail ? error.detail + " " : "")
-                    + "Stay connected to this network and try again. "
-                    + "If this keeps failing, find a triage coordinator in person.";
-                statusDiv.style.color = "#dc2626";
+                if (error.retryable) {
+                    // Never "sent". It is on the phone, which is not the same
+                    // thing, and saying otherwise would be the worst kind of lie
+                    // this page could tell.
+                    show("NOT SENT YET — saved on this phone. It will keep trying by itself. "
+                        + "Stay on this page, and move closer to the network if you can.", RED);
+                    startRetrying();
+                } else {
+                    clearPending();
+                    show("NOT SENT. " + (error.detail ? error.detail + " " : "")
+                        + "If this keeps failing, find a triage coordinator in person.", RED);
+                }
             } finally {
                 button.disabled = false;
             }
         });
+
+        // A request the phone carried out of range and back, or across a reload.
+        (function resume() {
+            if (!loadPending()) return;
+            show("A request saved on this phone was never sent. Trying again now...", AMBER);
+            startRetrying();
+        })();
     </script>
 </body>
 </html>

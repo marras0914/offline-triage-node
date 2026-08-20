@@ -13,8 +13,13 @@ cd "$(dirname "$0")/.."
 export MSYS_NO_PATHCONV=1
 export MSYS2_ARG_CONV_EXCL='*'
 
-IMAGE="$(grep -A1 '^  postgres:' docker-compose.yml | grep 'image:' | awk '{print $2}')"
-IMAGE="${IMAGE:-postgres:17-alpine}"
+# No default. A silent fallback would test a different Postgres than the node
+# runs, which is worse than not testing: it reports PASS for the wrong thing.
+IMAGE="$(awk '/^  postgres:/ {found=1} found && /image:/ {print $2; exit}' docker-compose.yml)"
+if [ -z "$IMAGE" ]; then
+  echo "could not read the postgres image from docker-compose.yml" >&2
+  exit 1
+fi
 NAME="triage-schema-test-$$"
 
 cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
