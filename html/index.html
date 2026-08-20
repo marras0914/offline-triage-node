@@ -79,9 +79,17 @@
                     throw failure;
                 }
 
-                statusDiv.textContent = result.id
-                    ? "Request #" + result.id + " received. Help is being routed."
-                    : "Request received. Help is being routed.";
+                // An identical message inside ten minutes is recorded against the
+                // request already in the queue. Saying so is more honest than
+                // implying a second request now exists.
+                if (result.already_logged) {
+                    statusDiv.textContent = "We already have this request. It is in the queue"
+                        + (result.id ? " (#" + result.id + ")" : "") + " and help is being routed.";
+                } else {
+                    statusDiv.textContent = result.id
+                        ? "Request #" + result.id + " received. Help is being routed."
+                        : "Request received. Help is being routed.";
+                }
                 statusDiv.style.color = "#16a34a";
                 form.reset();
             } catch (error) {

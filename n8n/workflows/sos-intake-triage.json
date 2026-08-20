@@ -181,7 +181,7 @@
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={{ { \"status\": \"received\", \"id\": $json.id } }}",
+        "responseBody": "={{ { \"status\": \"received\", \"id\": $json.id, \"already_logged\": $json.status === 'Duplicate' } }}",
         "options": {}
       },
       "id": "a1000000-0000-4000-8000-000000000007",

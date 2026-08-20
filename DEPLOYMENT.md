@@ -105,6 +105,7 @@ Two things worth doing immediately:
 
 *   Open the **`active_queue`** view. It is ordered by real urgency (Critical → Urgent → Standard, review-flagged first, then oldest) rather than by insertion order.
 *   Filter on **`needs_review = true`** to find requests the model could not classify. These were escalated to Critical automatically and have not been read by anything but a human yet.
+*   Note **`other_submissions`** and **`duplicate_of`**. A non-zero count means this reporter has sent more than once, and later messages are usually escalations rather than noise — read the cluster together before dispatching. Repeats are deliberately left in the queue; if you judge one genuinely redundant, set its `status` to `Duplicate` yourself.
 
 ## 6. Router / Walled Garden
 
