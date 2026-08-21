@@ -18,9 +18,44 @@ Everything below assumes one named human is watching. If you cannot staff that, 
 
 One person can hold all three in a small deployment. If you must drop one, drop the shift lead — but then the queue watcher runs the hourly node check themselves, because a node that has quietly stopped triaging looks exactly like a quiet hour.
 
+## The alarm
+
+Start one of these at the beginning of a shift. They watch the queue so nobody has to remember to.
+
+**In a terminal on the node** — the reliable one:
+
+```bash
+./scripts/watch-queue.sh
+```
+
+**On a coordinator's screen** — `http://<NODE_IP>:8081/`, then **click "Arm the alarm"**.
+
+Both read the same thresholds, so they cannot disagree about what counts as an alarm.
+
+| Level | Condition | Behaviour |
+| --- | --- | --- |
+| **critical** | A Critical request past its 15-minute deadline, or the queue cannot be read at all | Repeating siren, flashing red |
+| **warning** | Triage is not running, or requests are past deadline | Sounds once per change |
+| **attention** | Flagged requests waiting, new Criticals inside deadline, suspected injection | Quiet chime |
+| ok | Nothing outstanding | Silent green |
+
+Three things about it that are deliberate:
+
+*   **An unreachable node raises the alarm rather than showing green.** A blind alarm and a quiet queue look identical, so the page refuses to look calm when it cannot see. "ALARM IS BLIND" means work the queue directly and go fix the node.
+*   **"Silence 2 min" silences the noise, never the condition.** The colour, headline and counts stay, and the sound comes back by itself.
+*   **Only `critical` repeats.** A bell on every ordinary queue state is how a room learns to ignore the bell.
+
+### The browser alarm is the one that will let you down
+
+Read this before relying on it. A browser tab **cannot make a sound until the page has been clicked** — so an unarmed page is a silent alarm that looks like a working one. That is why there is a red bar across the top until you arm it, and a "Test sound" button. Use it; do not assume.
+
+It is also defeated by a muted tab, a locked screen, or a browser the OS suspended in the background. It asks for a screen wake lock, which the browser may refuse.
+
+`scripts/watch-queue.sh` has none of those failure modes, and it reads the database directly rather than through the API — so it keeps working when n8n is the broken thing. **If you only run one, run that.** Neither is a substitute for a physical siren, which does not exist yet ([#12](https://github.com/marras0914/offline-triage-node/issues/12)).
+
 ## The checks
 
-Four of them. Each is one view.
+The alarm tells you when to look. These are what you look at.
 
 ### Continuously — is anything past its deadline?
 
@@ -135,7 +170,8 @@ The field data is one database. `scripts/backup.sh` dumps it, verifies the dump 
 
 Stated plainly so nobody discovers it during an incident:
 
-*   **Nothing pages anyone.** `past_deadline` and `critical_past_deadline` are the alarm *conditions*, and today they are a screen someone has to look at. A physical siren or strobe on a breach is [#12](https://github.com/marras0914/offline-triage-node/issues/12), and until it exists the alarm is a human remembering to refresh.
+*   **Nothing reaches you away from the node.** The alarm makes noise on the machine it runs on and nowhere else — no paging, no radio, no siren in the next room. Someone has to be within earshot of a laptop. A physical siren or strobe driven off a breach is [#12](https://github.com/marras0914/offline-triage-node/issues/12).
+*   **The browser alarm is silent until armed**, and a locked or muted phone defeats it entirely. See above; prefer the terminal watcher.
 *   **The deadlines are judgement calls**, not measurements from a real incident. Change them in `triage_ack_deadline()` once you have evidence.
 *   **Attribution is by discipline.** See handover, above.
 *   **No shift scheduling, no escalation tree, no comms plan.** Those belong to whoever is actually deploying, and depend on the responders they have.

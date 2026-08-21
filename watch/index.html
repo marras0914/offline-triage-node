@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Triage Queue Alarm</title>
+    <style>
+        /* Readable across a room, on a laptop propped on a table, by someone who
+           is not looking directly at it. Large type is the whole design. */
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0; min-height: 100vh; display: flex; flex-direction: column;
+            background: #18181b; color: #fafafa; transition: background-color .3s;
+        }
+        body.ok        { background: #14532d; }
+        body.attention { background: #78350f; }
+        body.warning   { background: #7c2d12; }
+        body.critical  { background: #7f1d1d; }
+        /* The flash is deliberately unpleasant. An alarm that is easy to sit
+           beside is not an alarm. */
+        body.critical.flash { background: #dc2626; }
+
+        header { padding: 12px 20px; display: flex; justify-content: space-between;
+                 align-items: center; gap: 12px; flex-wrap: wrap;
+                 background: rgba(0,0,0,.25); font-size: 14px; }
+        main { flex: 1; display: flex; flex-direction: column; justify-content: center;
+               padding: 24px; text-align: center; }
+        .headline { font-size: clamp(2.2rem, 8vw, 5.5rem); font-weight: 800; line-height: 1.05;
+                    letter-spacing: -.02em; }
+        .detail { font-size: clamp(1rem, 2.6vw, 1.6rem); margin-top: 18px; opacity: .92; }
+        .action { font-size: clamp(.95rem, 2.2vw, 1.35rem); margin-top: 22px; padding: 14px 18px;
+                  background: rgba(0,0,0,.3); border-radius: 8px; display: inline-block;
+                  font-weight: 600; }
+        .counts { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center;
+                  padding: 16px 20px 24px; }
+        .tile { background: rgba(0,0,0,.28); border-radius: 8px; padding: 10px 16px; min-width: 108px; }
+        .tile .n { font-size: 1.9rem; font-weight: 700; display: block; line-height: 1.1; }
+        .tile .k { font-size: .74rem; text-transform: uppercase; letter-spacing: .06em; opacity: .8; }
+        .tile.bad .n { color: #fca5a5; }
+        button { font: inherit; font-weight: 600; padding: 10px 16px; border-radius: 6px;
+                 border: 1px solid rgba(255,255,255,.35); background: rgba(255,255,255,.12);
+                 color: #fafafa; cursor: pointer; }
+        button:hover { background: rgba(255,255,255,.2); }
+        #arm { background: #dc2626; border-color: #fca5a5; font-size: 1.05rem; }
+        .muted { opacity: .75; }
+        .warnbar { background: #b91c1c; color: #fff; padding: 10px 20px; font-weight: 700;
+                   text-align: center; font-size: .95rem; }
+        [hidden] { display: none !important; }
+    </style>
+</head>
+<body class="ok">
+    <!-- Browsers refuse to play sound until the page has been interacted with.
+         Without this bar the page would look like a working alarm and be silent,
+         which is worse than having no alarm at all. -->
+    <div class="warnbar" id="armbar">
+        This alarm is SILENT until you arm it — browsers block sound until a page is clicked.
+        <button id="arm">Arm the alarm</button>
+    </div>
+
+    <header>
+        <div><strong>Triage Queue Alarm</strong> <span class="muted" id="clock"></span></div>
+        <div>
+            <span class="muted" id="audiostate">sound: off</span>
+            &nbsp;<button id="test">Test sound</button>
+            &nbsp;<button id="silence" hidden>Silence 2 min</button>
+        </div>
+    </header>
+
+    <main>
+        <div class="headline" id="headline">Connecting...</div>
+        <div class="detail" id="detail"></div>
+        <div><span class="action" id="action" hidden></span></div>
+    </main>
+
+    <div class="counts" id="counts"></div>
+
+<script>
+(function () {
+    'use strict';
+
+    var POLL_MS = 5000;
+    var SNOOZE_MS = 120000;
+    // Two consecutive failures before alarming, so one dropped poll on a busy
+    // node does not cry wolf.
+    var FAIL_LIMIT = 2;
+
+    var el = {
+        body: document.body,
+        headline: document.getElementById('headline'),
+        detail: document.getElementById('detail'),
+        action: document.getElementById('action'),
+        counts: document.getElementById('counts'),
+        clock: document.getElementById('clock'),
+        audiostate: document.getElementById('audiostate'),
+        armbar: document.getElementById('armbar'),
+        arm: document.getElementById('arm'),
+        test: document.getElementById('test'),
+        silence: document.getElementById('silence')
+    };
+
+    var audio = null, armed = false, snoozeUntil = 0, failures = 0;
+    var sounding = false, flashTimer = null, currentLevel = 'ok';
+
+    // ---------------------------------------------------------------- sound
+    //
+    // Generated with an oscillator rather than shipped as an audio file: no
+    // binary asset in the repo, nothing to fail to load, and the tone can be
+    // shaped per level. A two-tone sweep carries across a noisy room better than
+    // a beep.
+    function ensureAudio() {
+        var Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) return null;
+        if (!audio) audio = new Ctx();
+        if (audio.state === 'suspended') audio.resume();
+        return audio;
+    }
+
+    function tone(startHz, endHz, seconds, volume) {
+        var ctx = ensureAudio();
+        if (!ctx) return;
+        var osc = ctx.createOscillator();
+        var gain = ctx.createGain();
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(startHz, ctx.currentTime);
+        osc.frequency.linearRampToValueAtTime(endHz, ctx.currentTime + seconds);
+        // Ramped rather than switched, so it does not click.
+        gain.gain.setValueAtTime(0, ctx.currentTime);
+        gain.gain.linearRampToValueAtTime(volume, ctx.currentTime + 0.02);
+        gain.gain.linearRampToValueAtTime(0, ctx.currentTime + seconds);
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.start(); osc.stop(ctx.currentTime + seconds);
+    }
+
+    function sound(level) {
+        if (!armed || Date.now() < snoozeUntil) return;
+        if (level === 'critical') { tone(880, 440, 0.5, 0.35); setTimeout(function () { tone(880, 440, 0.5, 0.35); }, 600); }
+        else if (level === 'warning') { tone(660, 660, 0.3, 0.22); }
+        else if (level === 'attention') { tone(520, 520, 0.18, 0.14); }
+    }
+
+    var soundTimer = null;
+    function startSounding(level) {
+        stopSounding();
+        sounding = true;
+        sound(level);
+        // Critical repeats until someone acts. Lesser levels announce once per
+        // change and then stay quiet, so the room does not learn to ignore it.
+        if (level === 'critical') {
+            soundTimer = setInterval(function () { sound('critical'); }, 4000);
+            flashTimer = setInterval(function () { el.body.classList.toggle('flash'); }, 700);
+        }
+    }
+    function stopSounding() {
+        sounding = false;
+        if (soundTimer) { clearInterval(soundTimer); soundTimer = null; }
+        if (flashTimer) { clearInterval(flashTimer); flashTimer = null; }
+        el.body.classList.remove('flash');
+    }
+
+    // ---------------------------------------------------------------- screen
+    // Best effort. A locked screen is a silent alarm, and this is the only thing
+    // a web page can do about it.
+    var wakeLock = null;
+    async function keepAwake() {
+        try {
+            if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen');
+        } catch (e) { /* denied or unsupported; the header says so */ }
+    }
+    document.addEventListener('visibilitychange', function () {
+        if (document.visibilityState === 'visible' && !wakeLock) keepAwake();
+    });
+
+    // ---------------------------------------------------------------- render
+    function tile(key, value, bad) {
+        return '<div class="tile' + (bad ? ' bad' : '') + '"><span class="n">' + value
+             + '</span><span class="k">' + key + '</span></div>';
+    }
+
+    function render(state) {
+        var level = state.level || 'ok';
+        if (level !== currentLevel) {
+            currentLevel = level;
+            el.body.className = level;
+            if (level === 'ok') stopSounding(); else startSounding(level);
+        }
+
+        el.headline.textContent = state.headline || '';
+        el.detail.textContent = state.detail || '';
+        el.action.textContent = state.action || '';
+        el.action.hidden = !state.action;
+        el.silence.hidden = (level === 'ok');
+
+        var c = state.counts || {};
+        el.counts.innerHTML =
+            tile('open', c.total_open || 0) +
+            tile('unack', c.unacknowledged || 0, (c.unacknowledged || 0) > 0) +
+            tile('critical unack', c.unacknowledged_critical || 0, (c.unacknowledged_critical || 0) > 0) +
+            tile('past deadline', c.past_deadline || 0, (c.past_deadline || 0) > 0) +
+            tile('needs review', c.needs_review_open || 0, (c.needs_review_open || 0) > 0) +
+            tile('oldest (min)', c.oldest_unacknowledged_min || 0, (c.oldest_unacknowledged_min || 0) > 15) +
+            tile('arrived 1h', c.arrived_last_hour || 0) +
+            tile('model fails 1h', c.model_failures_last_hour || 0, (c.model_failures_last_hour || 0) > 0);
+
+        el.clock.textContent = 'updated ' + new Date().toLocaleTimeString();
+    }
+
+    // ---------------------------------------------------------------- poll
+    async function poll() {
+        try {
+            var res = await fetch('/api/queue-health', { cache: 'no-store' });
+            // The body is read whatever the status. nginx answers a dead node
+            // with a 503 carrying a proper alarm payload, and that payload is
+            // more useful than the generic failure below — so a real answer is
+            // preferred over a status code, and only an unusable body counts as
+            // a failed poll.
+            var state = await res.json().catch(function () { return null; });
+            if (!state || !state.level) throw new Error('HTTP ' + res.status);
+            failures = 0;
+            render(state);
+        } catch (e) {
+            failures++;
+            if (failures < FAIL_LIMIT) return;
+            // A screen that cannot reach the node looks exactly like a quiet
+            // queue. Refusing to stay green is the entire point.
+            render({
+                level: 'critical',
+                headline: 'ALARM IS BLIND',
+                detail: 'Cannot reach the node (' + failures + ' failed checks). A quiet screen means nothing right now.',
+                action: 'Check the node is running, then reload. Work the queue directly meanwhile.',
+                counts: {}
+            });
+        }
+    }
+
+    // ---------------------------------------------------------------- controls
+    el.arm.addEventListener('click', function () {
+        armed = true;
+        ensureAudio();
+        tone(660, 990, 0.18, 0.25);
+        el.armbar.hidden = true;
+        el.audiostate.textContent = 'sound: ARMED';
+        keepAwake();
+        if (currentLevel !== 'ok') startSounding(currentLevel);
+    });
+
+    el.test.addEventListener('click', function () {
+        armed = true; ensureAudio(); el.armbar.hidden = true;
+        el.audiostate.textContent = 'sound: ARMED';
+        tone(880, 440, 0.5, 0.35);
+    });
+
+    el.silence.addEventListener('click', function () {
+        // Silences the noise, never the condition: the colour, the headline and
+        // the counts all stay. It returns by itself.
+        snoozeUntil = Date.now() + SNOOZE_MS;
+        stopSounding();
+        el.audiostate.textContent = 'sound: snoozed 2 min';
+        setTimeout(function () {
+            if (!armed) return;
+            el.audiostate.textContent = 'sound: ARMED';
+            if (currentLevel !== 'ok') startSounding(currentLevel);
+        }, SNOOZE_MS);
+    });
+
+    poll();
+    setInterval(poll, POLL_MS);
+})();
+</script>
+</body>
+</html>

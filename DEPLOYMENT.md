@@ -111,7 +111,7 @@ Two things worth doing immediately:
 
 ## 6. Router / Walled Garden
 
-On the guest VLAN's pre-authorization access list, allow unauthenticated traffic to the node's static IP on **port 80 only**. The portal proxies the webhook, so ports 5678 and 8080 do not need to be reachable from the emergency SSID — keep them on the operator network.
+On the guest VLAN's pre-authorization access list, allow unauthenticated traffic to the node's static IP on **port 80 only**. The portal proxies the webhook, so ports 5678 (n8n), 8080 (NocoDB) and 8081 (the coordinator alarm) do not need to be reachable from the emergency SSID — keep them on the operator network. 8081 in particular exposes queue depth and how far behind the node is, which is nobody's business on an open SSID.
 
 Point the captive portal redirect at `http://<NODE_IP>/`. Nginx serves the form for any unmatched path, which is what makes phones open the portal instead of reporting no internet.
 

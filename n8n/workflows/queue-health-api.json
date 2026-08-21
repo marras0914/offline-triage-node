@@ -1,0 +1,95 @@
+{
+  "id": "queueHealthApi1",
+  "name": "Queue Health API",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "none",
+    "saveExecutionProgress": false
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Queue Health API\n\nRead-only. Feeds the alarm page on port 8081 and `scripts/watch-queue.sh`.\n\n**Operator-facing only.** nginx serves this on 8081, which must stay off the guest VLAN — survivors reach port 80 and nothing else. It exposes counts, never message content.\n\nExecution logging is off for success: this is polled every few seconds and would otherwise bury real intake executions in the n8n log.",
+        "height": 280,
+        "width": 400,
+        "color": 5
+      },
+      "id": "b1000000-0000-4000-8000-000000000001",
+      "name": "About",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-160, -180]
+    },
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "queue-health",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "b1000000-0000-4000-8000-000000000002",
+      "name": "Health Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-160, 120],
+      "webhookId": "queue-health"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT h.*, (SELECT coalesce(json_agg(json_build_object('reason', reason, 'n', n) ORDER BY n DESC), '[]'::json) FROM (SELECT reason, count(*) AS n FROM review_pile GROUP BY reason) rp) AS review_reasons FROM queue_health h",
+        "options": {}
+      },
+      "id": "b1000000-0000-4000-8000-000000000003",
+      "name": "Read Queue Health",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [60, 120],
+      "credentials": {
+        "postgres": {
+          "id": "triagePostgres1",
+          "name": "Triage Postgres"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "notes": "Reads the queue_health view and a breakdown of review_pile reasons."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Decides the alarm level. Deliberately here rather than in the page, so the\n// terminal watcher and the browser page cannot disagree about what counts as an\n// alarm — two alerting tools with different opinions is worse than one.\n//\n// Must never throw: an error here would leave the alarm page with nothing to\n// show, which looks identical to a quiet queue.\nconst row = $input.item.json || {};\nconst num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };\n\n// The Postgres node was told to continue on error, so a database failure arrives\n// here as an error payload rather than a row. That is itself an alarm: if this\n// cannot be read, nobody is watching anything.\nif (row.error || row.unacknowledged === undefined) {\n  return {\n    json: {\n      level: 'critical',\n      headline: 'CANNOT READ THE QUEUE',\n      detail: 'The alarm cannot reach the database. Check the node before trusting a quiet screen.',\n      action: 'On the node: docker compose ps, then docker compose logs postgres',\n      unreadable: true,\n      at: new Date().toISOString()\n    }\n  };\n}\n\nconst critical_past_deadline = num(row.critical_past_deadline);\nconst past_deadline = num(row.past_deadline);\nconst unacknowledged_critical = num(row.unacknowledged_critical);\nconst model_failures = num(row.model_failures_last_hour);\nconst injections = num(row.injections_last_hour);\nconst needs_review_open = num(row.needs_review_open);\n\nlet level = 'ok';\nlet headline = 'Queue is current';\nlet detail = '';\nlet action = '';\n\nif (critical_past_deadline > 0) {\n  // The one unambiguous alarm: a life-threatening request nobody has picked up\n  // inside its deadline.\n  level = 'critical';\n  headline = critical_past_deadline + ' CRITICAL past deadline';\n  detail = 'Nobody has acknowledged ' + (critical_past_deadline === 1 ? 'a Critical request' : critical_past_deadline + ' Critical requests') + ' within 15 minutes.';\n  action = 'Open review_pile / active_queue now. Acknowledge and set assigned_to.';\n} else if (model_failures > 0) {\n  // Not a queue problem. Requests are still stored and escalated, but nothing is\n  // being sorted, so the queue is arriving as a flat pile of Criticals.\n  level = 'warning';\n  headline = 'Triage is not running';\n  detail = model_failures + ' request(s) in the last hour were stored without triage because the model was unreachable.';\n  action = 'Fix the node, do not hand-triage: docker compose logs ollama';\n} else if (past_deadline > 0) {\n  level = 'warning';\n  headline = past_deadline + ' past deadline';\n  detail = 'Requests are waiting longer than their severity allows.';\n  action = 'Work the queue; if arrivals exceed throughput you need more coordinators.';\n} else if (needs_review_open > 0) {\n  level = 'attention';\n  headline = needs_review_open + ' awaiting review';\n  detail = 'Flagged requests a human has not read yet.';\n  action = 'Work review_pile, worst reason first.';\n} else if (unacknowledged_critical > 0) {\n  level = 'attention';\n  headline = unacknowledged_critical + ' new Critical';\n  detail = 'Inside deadline, but unacknowledged.';\n  action = 'Acknowledge and assign.';\n}\n\nif (injections > 0 && level === 'ok') {\n  level = 'attention';\n  headline = injections + ' suspected injection';\n  detail = 'Instruction-shaped text in submitted messages. Triage output for those rows is not trusted.';\n  action = 'Read those rows in review_pile yourself.';\n}\n\nreturn {\n  json: {\n    level,\n    headline,\n    detail,\n    action,\n    counts: {\n      total_open: num(row.total_open),\n      unacknowledged: num(row.unacknowledged),\n      unacknowledged_critical,\n      past_deadline,\n      critical_past_deadline,\n      needs_review_open,\n      dispatched_open: num(row.dispatched_open),\n      arrived_last_hour: num(row.arrived_last_hour),\n      model_failures_last_hour: model_failures,\n      injections_last_hour: injections,\n      oldest_unacknowledged_min: num(row.oldest_unacknowledged_min)\n    },\n    review_reasons: row.review_reasons || [],\n    at: new Date().toISOString()\n  }\n};"
+      },
+      "id": "b1000000-0000-4000-8000-000000000004",
+      "name": "Decide Alarm Level",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [280, 120]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "b1000000-0000-4000-8000-000000000005",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [500, 120]
+    }
+  ],
+  "connections": {
+    "Health Webhook": {
+      "main": [[{ "node": "Read Queue Health", "type": "main", "index": 0 }]]
+    },
+    "Read Queue Health": {
+      "main": [[{ "node": "Decide Alarm Level", "type": "main", "index": 0 }]]
+    },
+    "Decide Alarm Level": {
+      "main": [[{ "node": "Respond", "type": "main", "index": 0 }]]
+    }
+  },
+  "pinData": {}
+}

@@ -200,19 +200,26 @@ docker compose exec -T n8n n8n import:credentials --input=/credentials/triage-po
   || fail "credential import failed. Check: docker compose logs n8n"
 docker compose exec -T n8n n8n import:workflow --input=/workflows/sos-intake-triage.json \
   || fail "workflow import failed. Check: docker compose logs n8n"
+docker compose exec -T n8n n8n import:workflow --input=/workflows/queue-health-api.json \
+  || fail "queue health workflow import failed. Check: docker compose logs n8n"
 
 # Both imports key off the fixed ids in those files, so this updates in place
 # instead of stacking up copies on every install.
 #
 # `publish:workflow` on n8n 2.x, `update:workflow` on 1.x. Try the current name
 # first and fall back, rather than guessing from a version string.
-if docker compose exec -T n8n n8n publish:workflow --id=sosIntakeTriage1 >/dev/null 2>&1; then
-  printf '  Workflow published.\n'
-elif docker compose exec -T n8n n8n update:workflow --id=sosIntakeTriage1 --active=true >/dev/null 2>&1; then
-  printf '  Workflow activated.\n'
-else
-  printf '  Could not activate from the CLI; activate "SOS Intake & AI Triage" in the editor.\n'
-fi
+activate_workflow() {
+  local id="$1" label="$2"
+  if docker compose exec -T n8n n8n publish:workflow --id="$id" >/dev/null 2>&1; then
+    printf '  %s published.\n' "$label"
+  elif docker compose exec -T n8n n8n update:workflow --id="$id" --active=true >/dev/null 2>&1; then
+    printf '  %s activated.\n' "$label"
+  else
+    printf '  Could not activate from the CLI; activate "%s" in the editor.\n' "$label"
+  fi
+}
+activate_workflow sosIntakeTriage1 "SOS Intake & AI Triage"
+activate_workflow queueHealthApi1  "Queue Health API"
 
 # ---------------------------------------------------------------------------
 step 7 "Restarting n8n to register the production webhook..."
@@ -275,6 +282,8 @@ printf '========================================================\n'
 printf '  Portal:    http://%s/           (survivors, port 80 only)\n' "$NODE_IP"
 printf '  n8n Hub:   http://%s:5678/      (operators)\n' "$NODE_IP"
 printf '  Dashboard: http://%s:8080/      (triage coordinators)\n' "$NODE_IP"
-printf '\n  Next: in NocoDB, add the `triage` Postgres database as a data source.\n'
+printf '  Alarm:     http://%s:8081/      (leave open on a screen, then click Arm)\n' "$NODE_IP"
+printf '\n  Start the queue alarm now:  ./scripts/watch-queue.sh\n'
+printf '  Next: in NocoDB, add the `triage` Postgres database as a data source.\n'
 printf '  See DEPLOYMENT.md for the connection details and VLAN setup.\n'
 printf '========================================================\n'
