@@ -34,28 +34,33 @@ The list above is a target, not a gate. A blueprint for the hours after infrastr
 
 | What you have | Model | What you get |
 | --- | --- | --- |
-| Prepositioned NUC, 32GB, iGPU | `llama3.1` 8B | The full design |
-| Any modern laptop, 16GB+, no GPU | `llama3.1` 8B on CPU | Full triage, ~13s per request (measured) |
-| Older laptop, 8GB | `llama3.2:3b` | Triage with 9/13 rather than 13/13 on the Urgent tier |
+| Prepositioned NUC, 32GB, iGPU | `llama3.1` 8B | The full design, with headroom for concurrent load |
+| **Any 2-core machine from ~2017 with 16GB** | `llama3.1` 8B on CPU | **Full triage, every eval gate passed, 14s per request — measured** |
+| 8GB | `llama3.2:3b` | Full triage at 6s; passes because the deterministic floor covers the model |
 | 4GB, a Raspberry Pi, or no model at all | none | **Intake and dashboard, no AI** — see below |
 
 Storage is not the constraint the spec implies: images and an 8B model come to roughly 13GB, so any disk with 20GB free will do.
 
-### Measured on a laptop, CPU only
+### Measured, CPU only, on two real machines
 
-Not estimates. This project's own [eval suite](eval/) run on an MSI Commercial 14 (i7-13700H, 32GB) under Docker Desktop on Windows, which gives Ollama **no GPU access at all** — so this is close to the realistic worst case for a machine of that class.
+Not estimates. This project's own [eval suite](eval/), 53 cases, no GPU acceleration anywhere.
 
-| Model | RAM | p50 | p90 | Worst | Queue ordering |
+| Machine | Model | p50 | p90 | Worst | Eval |
 | --- | --- | --- | --- | --- | --- |
-| `llama3.2:1b` | ~2GB | 4.8s | 7.7s | 15s | **Worthless** — every tier collapses to Critical |
-| `llama3.2:3b` | ~4GB | 6.7s | 10.3s | 55s | Good — 9/13 Urgent correct, 92.5% category |
-| `llama3.1:8b` | ~8GB | 13.4s | 19.5s | 136s | Best — 13/13 Urgent correct, 98.1% category |
+| **NUC** — i5-7260U, 2c/4t, 2017, native Linux | `llama3.2:3b` | **6.2s** | 7.0s | 25s | passes every gate |
+| **NUC** — same | `llama3.1:8b` | **14.0s** | 16.1s | 57s | passes every gate |
+| Laptop — i7-13700H, 14c/20t, Docker Desktop on Windows | `llama3.1:8b` | 12.0s | 15.7s | 64s | passes every gate |
+| Laptop — same | `llama3.2:1b` | 4.8s | 7.7s | 15s | **fails** — every tier collapses to Critical |
 
-**Do not go below 3B.** 1B runs anywhere and is not worth running: it satisfies the JSON schema contract perfectly and fails at the actual job, marking everything Critical. A queue where every row is the top priority is a queue you have to read end to end, which is the thing this system exists to avoid.
+Three things fall out of this, and the first was a surprise:
 
-**8B is comfortable on a laptop CPU.** 13s median for a form submission is unnoticeable to someone typing, and the request is stored regardless — nobody's request depends on inference finishing. The nginx proxy allows 300s and the n8n node 180s, so even the 136s worst case fits.
+**Core count matters far less than expected.** A two-core i5 from 2017 runs the full 8B model within 17% of a fourteen-core i7 from 2023. Inference at this size is memory-bandwidth bound, not core bound — and the laptop pays a virtualisation tax that the NUC does not, because Docker Desktop on Windows runs through WSL2 while the NUC runs Docker natively. **The OS is worth more than the silicon here.** If you have a choice, run Linux.
 
-Throughput is the real limit, not latency. Ollama serialises requests, so at ~13s each a single node handles roughly four or five submissions a minute before a queue forms; the concurrency caps in `nginx/default.conf` shed load rather than letting fifty people each wait behind it. If that ceiling matters for your population, that is the argument for the prepositioned build's iGPU — not the latency.
+**8B is the model, and older hardware can carry it.** 14s median for a form submission is unnoticeable to someone typing, and the request is stored regardless — nobody's request depends on inference finishing. The nginx proxy allows 300s and the n8n node 180s, so even the 57s worst case fits comfortably.
+
+**Do not go below 3B.** 1B satisfies the JSON schema contract perfectly and fails at the actual job, marking everything Critical. A queue where every row is top priority is a queue you must read end to end, which is the thing this system exists to avoid. 3B is a genuine fallback: it passes every gate, at 6.2s, and it only does so because the [deterministic severity floor](ARCHITECTURE.md#deterministic-backstops) catches what a smaller model misses. The backstops are what make weak hardware viable.
+
+Throughput is the real limit, not latency. Ollama serialises requests, so at ~14s each a single node handles roughly four submissions a minute before a queue forms; the concurrency caps in `nginx/default.conf` shed load rather than letting fifty people each wait behind it. **That ceiling — not speed — is the argument for the prepositioned build's iGPU.**
 
 ### The no-AI tier is real, not a consolation prize
 

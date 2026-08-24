@@ -135,9 +135,15 @@ rubric.
 
 ## Results
 
-All on the same 53 cases, on a laptop CPU with no GPU. `llama3.1:8b` is the
-deployment target; the smaller models are here because they are what an 8GB or
-4GB machine can actually run.
+All on the same 53 cases, CPU only, no GPU. `llama3.1:8b` is the deployment
+target; the smaller models are here because they are what a weaker machine can
+run.
+
+Since these were first recorded, `3b` has been re-run on a 2-core i5-7260U NUC
+and now **passes every gate** (100% recall, 0 under-escalation, 92.5% category).
+It failed on the laptop earlier only because the deterministic severity floor had
+not yet been expanded — the model did not improve, the backstop did. That is the
+clearest evidence in this file that the floor is what makes weak hardware viable.
 
 | metric | `1b` | `3b` | **`8b`** | bar |
 | --- | --- | --- | --- | --- |
@@ -150,7 +156,8 @@ deployment target; the smaller models are here because they are what an 8GB or
 | severity exact | 73.6% | 90.6% | **98.1%** | ungated |
 | people_affected | 92.7% | 97.6% | **100%** | ungated |
 | model's own fabrication | 3/3 | 2/3 | 2/3 | ungated |
-| p50 latency | 4.8s | 6.7s | 13.4s | ungated |
+| p50 latency (laptop) | 4.8s | 6.7s | 12.0s | ungated |
+| p50 latency (2c/4t NUC) | — | 6.2s | 14.0s | ungated |
 | | fails | fails | **meets the bar** | |
 
 `8b` is the first configuration to pass every gate. Its severity confusion matrix
