@@ -86,6 +86,9 @@ fi
 ensure_env POSTGRES_PASSWORD "$(rand_hex)"
 ensure_env NC_AUTH_JWT_SECRET "$(rand_hex)"
 ensure_env N8N_ENCRYPTION_KEY "$(rand_hex)"
+# The read-only role the MCP toolbelt queries as. Separate from the admin
+# password so the agent's credential can be rotated on its own.
+ensure_env TRIAGE_RO_PASSWORD "$(rand_hex)"
 ensure_env GENERIC_TIMEZONE "America/Chicago"
 
 set -a
@@ -133,6 +136,12 @@ done
 # changes on nodes that already hold data.
 psql_admin -d postgres < db/init/02-triage-schema.sql >/dev/null
 printf '  Schema applied to `triage`.\n'
+
+# 03 is re-runnable too, and re-applying it is how a rotated TRIAGE_RO_PASSWORD
+# reaches the role. \getenv inside the script reads the postgres container's own
+# environment, which compose populates from .env.
+psql_admin -d postgres < db/init/03-readonly-role.sql >/dev/null
+printf '  Read-only role `triage_ro` configured (cannot write, by grant).\n'
 
 # ---------------------------------------------------------------------------
 step 5 "Pulling the local model ($TRIAGE_MODEL)..."
@@ -194,14 +203,40 @@ cat > n8n/credentials/triage-postgres.json <<JSON
 JSON
 chmod 600 n8n/credentials/triage-postgres.json
 
+# The MCP toolbelt's credential. Same database, different role — this one cannot
+# write, so an agent that misbehaves cannot damage the queue.
+cat > n8n/credentials/triage-postgres-ro.json <<JSON
+[
+  {
+    "id": "triagePostgresRo1",
+    "name": "Triage Postgres (read-only)",
+    "type": "postgres",
+    "data": {
+      "host": "postgres",
+      "port": 5432,
+      "database": "triage",
+      "user": "triage_ro",
+      "password": "${TRIAGE_RO_PASSWORD}",
+      "ssl": "disable",
+      "allowUnauthorizedCerts": false
+    }
+  }
+]
+JSON
+chmod 600 n8n/credentials/triage-postgres-ro.json
+
 # n8n/credentials and n8n/workflows are bind mounts, so both files are already
 # visible inside the container.
 docker compose exec -T n8n n8n import:credentials --input=/credentials/triage-postgres.json \
   || fail "credential import failed. Check: docker compose logs n8n"
+docker compose exec -T n8n n8n import:credentials --input=/credentials/triage-postgres-ro.json \
+  || fail "read-only credential import failed. Check: docker compose logs n8n"
 docker compose exec -T n8n n8n import:workflow --input=/workflows/sos-intake-triage.json \
   || fail "workflow import failed. Check: docker compose logs n8n"
 docker compose exec -T n8n n8n import:workflow --input=/workflows/queue-health-api.json \
   || fail "queue health workflow import failed. Check: docker compose logs n8n"
+docker compose exec -T n8n n8n import:workflow --input=/workflows/mcp-tools-api.json \
+  || fail "MCP tools workflow import failed. Check: docker compose logs n8n"
 
 # Both imports key off the fixed ids in those files, so this updates in place
 # instead of stacking up copies on every install.
@@ -220,6 +255,7 @@ activate_workflow() {
 }
 activate_workflow sosIntakeTriage1 "SOS Intake & AI Triage"
 activate_workflow queueHealthApi1  "Queue Health API"
+activate_workflow mcpToolsApi1     "MCP Tools API"
 
 # ---------------------------------------------------------------------------
 step 7 "Restarting n8n to register the production webhook..."

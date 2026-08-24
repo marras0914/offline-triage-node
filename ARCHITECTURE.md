@@ -64,6 +64,22 @@ So the safety floor cannot be treated as scaffolding to remove once a better mod
 
 **Both of the patterns above were added because the 8B run failed on them**, which is worth being honest about: the floor now covers all 29 Critical cases in the golden set deterministically, with zero false positives on Standard or Urgent — but it covers them partly *because it was grown from them*. The suite is a regression guard against losing that coverage, not evidence the vocabulary generalises. Only real intake tests that.
 
+### The MCP toolbelt, and what it is kept away from
+
+A coordinator can ask the queue a question in words (`./scripts/ask.sh "who needs oxygen?"`). A local model answers using six read-only tools over MCP. See [mcp/README.md](mcp/README.md).
+
+The architectural point is what it is *not* allowed to touch. **It is not on the intake path.** Intake's guarantee — an unreachable model still yields a stored, flagged, escalated row — is the reason this system works, and richer context is not worth trading for it. Nothing in the toolbelt runs while a request is being triaged.
+
+Three layers keep it from damaging the queue, and only the last one matters:
+
+1. The model never writes SQL. It picks a tool and fills parameters; the SQL is fixed. A small model composing queries on a two-core node is a denial of service against the thing also trying to triage.
+2. Parameters are constrained — enums whitelisted, limits clamped, text escaped into literals.
+3. Queries run as `triage_ro`, which cannot write. `SELECT` on four relations, `default_transaction_read_only`, a 5s statement timeout, no access to `request_events`.
+
+Layer 3 is the real control, because it holds when the first two are wrong.
+
+Worth recording: **this feature's original justification was overtaken by a database trigger.** It was meant to let an agent check whether a reporter had asked before, so a repeat arrived with context. The dedupe trigger below now does that deterministically, on every insert path, with no model involved. The agent was re-scoped to the thing it is genuinely better at — answering a question phrased in words. A regex beating an agent is the right outcome, and the sort of thing worth noticing rather than working around.
+
 ### Repeat submissions
 
 The same household will submit three or four times, and the instinct — suppress the repeats — is wrong. Marking a repeat `Duplicate` removes it from `active_queue`, so a household's *second and worse* emergency would silently vanish. A repeat is usually an escalation, not noise: *"we need water and blankets"* followed twenty minutes later by *"UPDATE grandma collapsed she is not breathing."*

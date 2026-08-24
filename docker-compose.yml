@@ -72,6 +72,9 @@ services:
       - POSTGRES_USER=triage_admin
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       - POSTGRES_DB=n8n_primary
+      # Read by db/init/03-readonly-role.sql via psql's \getenv, to set the
+      # password on the read-only role the MCP toolbelt uses.
+      - TRIAGE_RO_PASSWORD=${TRIAGE_RO_PASSWORD:?set TRIAGE_RO_PASSWORD in .env}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       # Creates the `triage` and `nocodb_meta` databases and the requests
@@ -131,9 +134,12 @@ services:
       # inside the container during install.
       - ./n8n/workflows:/workflows:ro
       - ./n8n/credentials:/credentials:ro
-      # The eval harness runs in here: node is already present and `ollama`
-      # resolves over the internal network. See eval/README.md.
+      # The eval harness and the MCP toolbelt both run in here, because this
+      # image already carries node and can resolve `ollama` and `postgres` over
+      # the internal network. Neither needs node installed on the host, which the
+      # target hardware may well not have.
       - ./eval:/eval:ro
+      - ./mcp:/mcp:ro
     networks:
       - edge_network
     depends_on:

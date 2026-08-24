@@ -79,7 +79,7 @@ A laptop is a battery-backed server with a screen and a keyboard attached, which
 
 Both are real gaps, tracked rather than glossed:
 
-1.  **You cannot download anything during a blackout** ([#21](https://github.com/marras0914/offline-triage-node/issues/21)). `install.sh` currently pulls five images and a multi-GB model from the internet. Until an offline bundle exists, the node has to be built *before* it is needed — which quietly means the blueprint only helps people who predicted the emergency.
+1.  **You cannot download anything during a blackout** ([#21](https://github.com/marras0914/offline-triage-node/issues/21)). `scripts/make-offline-bundle.sh` now stages every image and the model onto removable media, and `install.sh` loads from it without touching the network — but that bundle still has to be built *beforehand*, on a machine that has a connection, and the air-gapped install has not yet been run end to end. Until it has, treat the offline path as written but unproven.
 2.  **A laptop hotspot still cannot serve a captive portal** ([#22](https://github.com/marras0914/offline-triage-node/issues/22)). The *router* half of this is now solved: `docker compose --profile captive-dns up -d` answers every hostname with the node, so a plain consumer router works — set its DHCP-advertised DNS to the node and detection fires. What remains is the laptop's own hotspot, where binding port 80 and controlling DNS both need privileges the OS does not hand out, and where client limits are typically around eight devices.
 
 ## Documentation
@@ -87,6 +87,7 @@ Both are real gaps, tracked rather than glossed:
 *   **[DEPLOYMENT.md](DEPLOYMENT.md)** — installing, including with no internet
 *   **[OPERATIONS.md](OPERATIONS.md)** — running it: who watches the queue, the four checks, backups, handover
 *   **[ARCHITECTURE.md](ARCHITECTURE.md)** — the stack, the data flow, and the deterministic safety backstops
+*   **[mcp/README.md](mcp/README.md)** — the read-only toolbelt for asking the queue questions
 *   **[eval/README.md](eval/README.md)** — the triage regression suite and what it does and does not prove
 *   **[CONTRIBUTING.md](CONTRIBUTING.md)** — where help is needed
 
@@ -129,7 +130,7 @@ Also in this phase, from review rather than the original plan:
 - [ ] [Model invents injuries from noise](https://github.com/marras0914/offline-triage-node/issues/10) — confirmed defect: pure gibberish produced *"Unconscious person needs medical attention."* Escalating noise to Critical is correct; fabricating a casualty is not
 - [ ] [Deduplicate rapid-fire requests](https://github.com/marras0914/offline-triage-node/issues/11) — the same household will submit several times
 - [ ] [Backend utilities](https://github.com/marras0914/offline-triage-node/issues/12) — sanitization, and physical triggers so a coordinator away from the screen still gets told
-- [ ] [Local MCP toolbelt](https://github.com/marras0914/offline-triage-node/issues/13) — let the agent check whether a reporter has already asked for aid, without putting intake on the critical path
+- [x] [Local MCP toolbelt](https://github.com/marras0914/offline-triage-node/issues/13) — six read-only tools a coordinator can query in plain language ([mcp/](mcp/)); off the intake path, and unable to write by database grant
 
 ### Phase 4 — Physical Field Testing
 

@@ -53,6 +53,15 @@ It is also defeated by a muted tab, a locked screen, or a browser the OS suspend
 
 `scripts/watch-queue.sh` has none of those failure modes, and it reads the database directly rather than through the API — so it keeps working when n8n is the broken thing. **If you only run one, run that.** Neither is a substitute for a physical siren, which does not exist yet ([#12](https://github.com/marras0914/offline-triage-node/issues/12)).
 
+## Asking the queue a question
+
+```bash
+./scripts/ask.sh "how many people need insulin?"
+./scripts/ask.sh "is anything happening on Cedar Road?"
+```
+
+Read-only, and it cannot act — no acknowledging, assigning or dispatching, by database grant rather than by convention. It prints each tool call as it goes and cites request ids; check them. Treat it exactly like the AI triage: an aid for reading the queue, never the authority on who gets help first. A small model finds a question across the whole queue much harder than classifying one message, so expect it to be wrong more often than the eval numbers suggest. See [mcp/README.md](mcp/README.md).
+
 ## The checks
 
 The alarm tells you when to look. These are what you look at.
