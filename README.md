@@ -10,7 +10,19 @@ A portable, battery-backed edge computing node that broadcasts a local Wi-Fi mes
 
 ## Status
 
-Pre-field-test. The stack deploys and the intake pipeline runs end to end, but this has not yet been validated in a live incident. See the [roadmap board](https://github.com/users/marras0914/projects/2) for what is verified and what is not.
+Pre-field-test. The software is essentially complete and tested; **nothing has been validated on deployed hardware or a real handset.** See the [roadmap board](https://github.com/users/marras0914/projects/2).
+
+What is verified, on developer machines rather than in a field:
+
+| | |
+| --- | --- |
+| Triage quality | 53 cases, `llama3.1:8b` passes every gate — 100% recall over 29 Critical, 0 under-escalation ([eval/](eval/)) |
+| Schema behaviour | 31 assertions, including that a household's *worse* follow-up is never hidden ([db/test-schema.sh](db/test-schema.sh)) |
+| Portal offline behaviour | 17 tests — holds a request on the phone, never reports a false success ([html/test-portal.mjs](html/test-portal.mjs)) |
+| Agent question answering | 10 questions, 0 fabricated ids, 7/8 facts ([eval/AGENT.md](eval/AGENT.md)) |
+| Hardware floor | a 2-core 2017 i5 runs 8B at 14s median, passing every gate |
+
+What is **not** verified: a clean boot on the target node, captive portal detection on any real phone, the air-gapped install, VLAN and mesh behaviour, and power draw. Those are Phases 1, 2 and 4 on the board, and no amount of further desk work substitutes for them.
 
 **This is not a substitute for emergency services.** Where any emergency number still answers, call it. This node is built for the hours when nothing answers — and its AI triage is a queue-ordering aid for human coordinators, never an authority on who gets help first. Requests the model cannot classify are escalated to Critical and flagged for a human rather than filed automatically.
 
@@ -113,9 +125,10 @@ Partially verified already, on a dev box rather than target hardware: the schema
 
 Also in this phase, from review rather than the original plan:
 
-- [ ] [Pin all image tags](https://github.com/marras0914/offline-triage-node/issues/17) — a rebuild mid-incident must not pull a release that changes node behaviour
+- [x] [Pin all image tags](https://github.com/marras0914/offline-triage-node/issues/17) — all six pinned to exact patch versions, each verified rather than assumed. A stale `ollama:latest` at 0.19.0 had been sitting in a local cache while 0.32.15 was current, so earlier benchmarks ran against a version nobody had chosen
+- [x] [Offline bootstrap](https://github.com/marras0914/offline-triage-node/issues/21) — `scripts/make-offline-bundle.sh` stages every image and the model (~12.7GB, so a 32GB stick); `install.sh` loads from it without touching the network. **The air-gapped install has not been run end to end** — the one claim here still unproven
 - [x] [Coordinator runbook](https://github.com/marras0914/offline-triage-node/issues/18) — [OPERATIONS.md](OPERATIONS.md), plus the `review_pile` / `queue_health` views and an audit trail so "nobody looked" is visible rather than silent
-- [ ] [Rate limiting](https://github.com/marras0914/offline-triage-node/issues/19) — `/api/sos` is unauthenticated by design, but uncapped
+- [x] [Rate limiting](https://github.com/marras0914/offline-triage-node/issues/19) — per-device and global caps in nginx, and a shed request is told so in readable JSON. The numbers are still guesses pending measured load
 
 ### Phase 2 — Network Isolation & Captive Portal
 
@@ -125,17 +138,20 @@ Also in this phase, from review rather than the original plan:
 - [ ] [Walled garden](https://github.com/marras0914/offline-triage-node/issues/6) — pre-authorization access to the NUC on **port 80 only**; survivors never touch 5678 or 8080
 - [ ] [Captive portal redirect](https://github.com/marras0914/offline-triage-node/issues/7) — a phone joins and the OS opens the form by itself
 - [ ] [End-to-end mobile test](https://github.com/marras0914/offline-triage-node/issues/8) — a chaotic SOS from a handset arrives as a clean row in NocoDB
+- [ ] [Phone-side resilience](https://github.com/marras0914/offline-triage-node/issues/23) — the portal now holds a request in the phone's own storage and retries with backoff ([17 tests](html/test-portal.mjs)). A service worker for locked-screen delivery, and what captive webviews actually permit, both need real handsets
+- [ ] [Captive portal without a capable router](https://github.com/marras0914/offline-triage-node/issues/22) — solved for a consumer router: `--profile captive-dns` answers every hostname with the node, so only its DHCP-advertised DNS needs setting. The laptop-hotspot path probably cannot be solved
 
 ### Phase 3 — AI Hardening & Custom Tooling
 
 *Prevent the local agent from hallucinating under stress, and extend the system's logic.*
 
 - [x] [Chaos testing](https://github.com/marras0914/offline-triage-node/issues/9) — 42-case golden set and a regression harness that loads the deployed prompt, so a prompt edit is tested by definition ([eval/](eval/)). Baselined; still to re-run at 8B
-- [ ] [Prompt injection can bury a Critical request](https://github.com/marras0914/offline-triage-node/issues/20) — confirmed and mitigated by a deterministic severity floor; the eval `inject-*` cases are the regression test
-- [ ] [Model invents injuries from noise](https://github.com/marras0914/offline-triage-node/issues/10) — confirmed defect: pure gibberish produced *"Unconscious person needs medical attention."* Escalating noise to Critical is correct; fabricating a casualty is not
-- [ ] [Deduplicate rapid-fire requests](https://github.com/marras0914/offline-triage-node/issues/11) — the same household will submit several times
-- [ ] [Backend utilities](https://github.com/marras0914/offline-triage-node/issues/12) — sanitization, and physical triggers so a coordinator away from the screen still gets told
+- [x] [Prompt injection can bury a Critical request](https://github.com/marras0914/offline-triage-node/issues/20) — confirmed, then closed by a deterministic severity floor covering all 29 Critical cases; recall 83.3% → 100%. Open only for growing the floor’s vocabulary from real intake
+- [x] [Model invents injuries from noise](https://github.com/marras0914/offline-triage-node/issues/10) — pure gibberish produced *"Unconscious person needs medical attention."* A message with almost no content cannot be summarised, so the stored summary is now the person’s own words. Fabrications reaching a coordinator: 3 → 0
+- [x] [Deduplicate rapid-fire requests](https://github.com/marras0914/offline-triage-node/issues/11) — repeats are **linked, not suppressed**: a household’s second message is usually an escalation, so hiding it would be the dangerous choice. A database trigger, so every insert path inherits it
+- [ ] [Backend utilities and a physical alarm](https://github.com/marras0914/offline-triage-node/issues/12) — the software alarm is done (terminal watcher and a screen page, both refusing to look calm when they cannot see the queue). **Nothing reaches anyone away from the node**, which is the part still missing
 - [x] [Local MCP toolbelt](https://github.com/marras0914/offline-triage-node/issues/13) — six read-only tools a coordinator can query in plain language ([mcp/](mcp/)); off the intake path, and unable to write by database grant
+- [x] [Agent eval](https://github.com/marras0914/offline-triage-node/issues/24) — 10 questions against a fixture queue ([eval/AGENT.md](eval/AGENT.md)). `llama3.1:8b`: 0 fabricated ids, 7/8 facts, 7/8 tool choice. It found a real defect on its first run — and a false pass in its own assertions
 
 ### Phase 4 — Physical Field Testing
 
