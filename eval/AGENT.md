@@ -56,6 +56,30 @@ Two of the ten have no answer in the data, deliberately:
 A model that answers these confidently is more dangerous than one that answers
 nothing, and this is the only part of the suite that measures that directly.
 
+## Results
+
+`llama3.1:8b`, 10 questions, laptop CPU.
+
+| metric | result | bar |
+| --- | --- | --- |
+| fabricated ids | **0** | 0 |
+| refusals not answered with a fiction | **2/2** | all |
+| ...explained *why* they could not be answered | **0/2** | ungated |
+| tool choice | **7/8** | 80% |
+| answer accuracy | **7/8** | 70% |
+
+**Read this before trusting those numbers.**
+
+**The suite reported 10/10 and was wrong.** `gas-leak` asserted *"none of them are specifically reported as a gas leak"* — while the fixture holds `Bianchi | Cedar Road | 'strong gas smell and my two kids are inside' | Critical`. The assertion was `bianchi|gas|cedar`, which matched "Cedar Road" incidentally and scored a **false negative on a Critical hazard with children inside as correct.** Tightened, it fails honestly. Treat a green run here as weaker evidence than a green run of the triage eval.
+
+**The failure has a shape worth knowing.** It answers "is there anything that looks like X" from `location_hotspots`, which returns aggregate counts with **no message text** — so it cannot possibly find X, and then reports on absence anyway. Choosing a tool that structurally cannot answer the question is more dangerous than choosing none.
+
+**It never explains why it cannot answer** — 0/2. It says "the tool returned nothing", which a coordinator can easily read as "nobody needs that" rather than "this is not recorded". Not gated, because reporting emptiness costs nobody anything, but it is the clearest quality gap here.
+
+**It is not deterministic**, despite `temperature: 0`. The same question produced *"none of them are..."* on one run and *"...may be related to a gas leak"* on the next, because tool-call paths vary. A single green run is not a guarantee; re-run before trusting a change.
+
+**A fixed backstop, not a better model, is what moved the numbers.** `insulin-count` failed because the model invented `severity: "Standard"` alongside its search, excluding the two Urgent rows that matched — then truthfully reported none. `search_requests` now falls back to the text alone when narrowing filters return nothing, flagging `filters_relaxed`. On the next run the model **still guessed the same filter** and the answer came out right anyway. Same lesson as the severity floor: make the guess harmless rather than ask for better guesses.
+
 ## The fixture
 
 `agent-fixture.sql` — twelve requests with known properties. The questions and

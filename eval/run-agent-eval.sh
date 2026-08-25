@@ -17,10 +17,13 @@ cd "$(dirname "$0")/.."
 
 MODEL=""
 JSON=""
+QUESTIONS=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --model) MODEL="${2:-}"; shift 2 ;;
     --json)  JSON="${2:-}"; shift 2 ;;
+    # A subset file, for chasing one failing case without paying for all ten.
+    --questions) QUESTIONS="${2:-}"; shift 2 ;;
     -h|--help) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
@@ -41,10 +44,16 @@ PG_IMAGE="$(awk '/^  postgres:/ {f=1} f && /image:/ {print $2; exit}' docker-com
 N8N_IMAGE="$(awk '/^  n8n:/ {f=1} f && /image:/ {print $2; exit}' docker-compose.yml)"
 OLLAMA_IMAGE="$(awk '/^  ollama:/ {f=1} f && /image:/ {print $2; exit}' docker-compose.yml)"
 
+CREDS_ERR="$(pwd -W 2>/dev/null || pwd)/.agent-eval-creds.err"
+
 cleanup() {
   docker rm -f "$PG" "$N8N" >/dev/null 2>&1
   [ -n "$OLLAMA_OWNED" ] && docker rm -f "$OLLAMA_OWNED" >/dev/null 2>&1
+  # Disconnect a borrowed Ollama rather than leaving it attached to a dead network.
+  [ -z "$OLLAMA_OWNED" ] && [ -n "${OLLAMA_ALIAS:-}" ] \
+    && docker network disconnect "$NET" "$OLLAMA_ALIAS" >/dev/null 2>&1
   docker network rm "$NET" >/dev/null 2>&1
+  rm -f "$CREDS_ERR"
 }
 trap cleanup EXIT
 
@@ -71,13 +80,35 @@ fi
 printf '  Ollama: %s\n' "$OLLAMA_ALIAS"
 
 # --- throwaway Postgres, built from the real init scripts
-docker run -d --name "$PG" --network "$NET" --network-alias postgres \
-  -e POSTGRES_USER=triage_admin -e POSTGRES_PASSWORD=test -e POSTGRES_DB=n8n_primary \
-  -e TRIAGE_RO_PASSWORD="$RO_PW" \
-  -v "$(pwd -W 2>/dev/null || pwd)/db/init:/docker-entrypoint-initdb.d:ro" \
-  "$PG_IMAGE" >/dev/null || { echo "could not start Postgres"; exit 1; }
-for _ in $(seq 1 60); do docker exec "$PG" pg_isready -U triage_admin -d triage >/dev/null 2>&1 && break; sleep 2; done
-docker exec "$PG" pg_isready -U triage_admin -d triage >/dev/null 2>&1 || { echo "Postgres never ready"; exit 1; }
+[ -n "$PG_IMAGE" ] || { echo "could not read the postgres image from docker-compose.yml" >&2; exit 1; }
+[ -n "$N8N_IMAGE" ] || { echo "could not read the n8n image from docker-compose.yml" >&2; exit 1; }
+
+if ! docker run -d --name "$PG" --network "$NET" --network-alias postgres \
+       -e POSTGRES_USER=triage_admin -e POSTGRES_PASSWORD=test -e POSTGRES_DB=n8n_primary \
+       -e TRIAGE_RO_PASSWORD="$RO_PW" \
+       -v "$(pwd -W 2>/dev/null || pwd)/db/init:/docker-entrypoint-initdb.d:ro" \
+       "$PG_IMAGE" >/dev/null 2>"$CREDS_ERR"; then
+  echo "could not start Postgres:" >&2; cat "$CREDS_ERR" >&2; exit 1
+fi
+
+# Two waits, not one. Postgres accepts connections on its socket partway through
+# running the init scripts and then restarts, so a single pg_isready can pass
+# against a server that is about to go away. Wait for readiness, then require it
+# to still be ready a moment later.
+pg_ready() { docker exec "$PG" pg_isready -U triage_admin -d triage >/dev/null 2>&1; }
+for _ in $(seq 1 60); do pg_ready && break; sleep 2; done
+sleep 3
+for _ in $(seq 1 30); do pg_ready && break; sleep 2; done
+
+if ! pg_ready; then
+  # A bare "never ready" hides whether the container died, an init script failed,
+  # or the mount was empty — which is the difference between three fixes.
+  echo "Postgres never became ready." >&2
+  echo "  container: $(docker ps -a --filter "name=$PG" --format '{{.Status}}')" >&2
+  echo "  last log lines:" >&2
+  docker logs --tail 20 "$PG" 2>&1 | sed 's/^/    /' >&2
+  exit 1
+fi
 
 docker exec -i "$PG" psql -q -v ON_ERROR_STOP=1 -U triage_admin -d postgres < eval/agent-fixture.sql >/dev/null \
   || { echo "could not load the fixture"; exit 1; }
@@ -143,8 +174,8 @@ EXEC="docker exec -e TRIAGE_AGENT_MODEL=$MODEL -e TRIAGE_AGENT_TRACE=1 -e OLLAMA
 command -v node >/dev/null 2>&1 \
   || { echo "the harness needs node on the host (the agent itself does not)." >&2; exit 1; }
 
-if [ -n "$JSON" ]; then
-  node eval/run-agent-eval.mjs --label "$MODEL" --exec "$EXEC" --json "$JSON"
-else
-  node eval/run-agent-eval.mjs --label "$MODEL" --exec "$EXEC"
-fi
+set -- --label "$MODEL" --exec "$EXEC"
+[ -n "$JSON" ] && set -- "$@" --json "$JSON"
+[ -n "$QUESTIONS" ] && set -- "$@" --questions "$QUESTIONS"
+
+node eval/run-agent-eval.mjs "$@"

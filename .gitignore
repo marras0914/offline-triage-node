@@ -4,3 +4,4 @@ n8n/credentials/*.json
 offline-bundle/
 backups/
 .agent-eval-creds/
+.agent-eval-creds.err
