@@ -1,5 +1,9 @@
 # Triage Eval
 
+> For the MCP agent — whether a model can answer a coordinator's question
+> without inventing anything — see **[AGENT.md](AGENT.md)**. That suite is
+> stricter, because the agent has no fail-safe behind it.
+
 A regression suite for the thing this project cannot test by eye: whether the
 local model, running the deployed prompt, sorts real human panic correctly.
 

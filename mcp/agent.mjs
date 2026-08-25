@@ -172,6 +172,15 @@ try {
       } catch (e) {
         text = 'ERROR: ' + String(e.message || e);
       }
+
+      // With tracing on, the raw tool result goes to stderr too. The agent eval
+      // needs it to tell a grounded answer from an invented one: an id in the
+      // answer that appears in no tool result is a fabrication, and that cannot
+      // be checked from the answer alone.
+      if (process.env.TRIAGE_AGENT_TRACE === '1') {
+        process.stderr.write('  <<<RESULT ' + name + '\n' + text + '\n  RESULT>>>\n');
+      }
+
       messages.push({ role: 'tool', content: text.slice(0, 12000) });
     }
 

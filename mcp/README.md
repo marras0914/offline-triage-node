@@ -82,7 +82,7 @@ That is deliberate. An agent whose reasoning is invisible cannot be checked, and
 
 ## Limits worth knowing
 
-*   **A small model will misread a hard question.** It is much easier to classify one message than to reason across a queue, so expect worse behaviour here than the eval numbers suggest — those measure classification, not question answering. There is no eval for the agent yet; that is the obvious next piece of work.
+*   **A small model will misread a hard question.** It is much easier to classify one message than to reason across a queue, so expect worse behaviour here than the triage eval numbers suggest — those measure classification, not question answering. The agent has its own suite: [eval/AGENT.md](../eval/AGENT.md), which gates fabrication at zero and requires it to decline questions the data cannot answer.
 *   **No pagination.** Every tool caps at 100 rows, so on a large queue an answer may be drawn from a slice. `queue_summary` gives true totals.
 *   **English only**, like the rest of the tooling. The severity floor covers Spanish; this does not.
 *   **It cannot act.** No acknowledging, assigning, or dispatching — by design, and by grant.

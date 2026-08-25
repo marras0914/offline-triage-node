@@ -34,13 +34,18 @@
 
             <button type="submit">Submit Request</button>
             <div id="statusMessage" class="status"></div>
+            <!-- Only shown once automatic retrying has stopped, so someone who
+                 has moved somewhere with signal is not stuck waiting on a timer
+                 that has given up. -->
+            <button type="button" id="retryNow" hidden>Try again</button>
         </form>
     </div>
 
     <script>
         var form = document.getElementById('sosForm');
-        var button = form.querySelector('button');
+        var button = form.querySelector('button[type="submit"]');
         var statusDiv = document.getElementById('statusMessage');
+        var retryButton = document.getElementById('retryNow');
 
         var AMBER = "#d97706", GREEN = "#16a34a", RED = "#dc2626";
         function show(text, colour) { statusDiv.textContent = text; statusDiv.style.color = colour; }
@@ -96,28 +101,76 @@
             return result;
         }
 
-        // 15s, chosen to stay under the node's per-device rate limit of 10/min.
-        // A tighter loop would trip its own shedding and retry against a 429
-        // forever.
-        var RETRY_MS = 15000;
+        // Escalating retry, because the phone's battery is part of the emergency.
+        //
+        // A fixed 15s timer runs all night on a handset that may be the only one
+        // left with charge. These delays back off instead — but only to 60s,
+        // because the thing being waited for is usually someone walking back into
+        // range, and a minute is about as long as it is reasonable not to notice
+        // that.
+        //
+        // The floor stays at 15s to stay under the node's per-device rate limit
+        // of 10/min. Anything tighter trips its own shedding and then retries
+        // against a 429 forever.
+        //
+        // Safe to retry at all only because the node suppresses a byte-identical
+        // repeat inside ten minutes, so a retry cannot pile duplicates into a
+        // coordinator's queue.
+        var BACKOFF_MS = [15000, 15000, 30000, 30000, 60000];
+        // After this long, stop burning battery on a network that is not coming
+        // back. The request is NOT discarded — it stays on the phone, the person
+        // is told plainly, and a reload or a tap resumes.
+        var GIVE_UP_AFTER_MS = 20 * 60 * 1000;
+
         var retryTimer = null;
-        function stopRetrying() { if (retryTimer) { clearInterval(retryTimer); retryTimer = null; } }
-        function startRetrying() {
-            if (retryTimer) return;
-            // Safe to retry because the node suppresses a byte-identical repeat
-            // inside ten minutes, so a retry cannot pile duplicates into a
-            // coordinator's queue.
-            retryTimer = setInterval(async function () {
+        var attempt = 0;
+        var startedAt = 0;
+
+        function stopRetrying() {
+            if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+        }
+
+        function backoffFor(n) {
+            return BACKOFF_MS[Math.min(n, BACKOFF_MS.length - 1)];
+        }
+
+        function startRetrying(reset) {
+            if (reset) { attempt = 0; startedAt = Date.now(); }
+            if (!startedAt) startedAt = Date.now();
+            stopRetrying();
+
+            if (Date.now() - startedAt > GIVE_UP_AFTER_MS) {
+                // Never silently. The payload is still in localStorage, so this is
+                // "paused", not "lost", and the wording has to say which.
+                show("STILL NOT SENT after 20 minutes. Your request is saved on this phone "
+                   + "but the network is not reachable. Find a triage coordinator in person. "
+                   + "Tap “Try again” if you move somewhere with signal.", RED);
+                retryButton.hidden = false;
+                return;
+            }
+
+            var wait = backoffFor(attempt);
+            retryTimer = setTimeout(async function () {
                 var pending = loadPending();
                 if (!pending) { stopRetrying(); return; }
-                try { reportSuccess(await send(pending.payload)); }
-                catch (e) { if (!e.retryable) { clearPending(); stopRetrying(); } }
-            }, RETRY_MS);
+                attempt++;
+                try {
+                    reportSuccess(await send(pending.payload));
+                } catch (e) {
+                    if (!e.retryable) { clearPending(); stopRetrying(); return; }
+                    show("NOT SENT YET — saved on this phone, still trying (attempt "
+                       + attempt + "). Move closer to the network if you can.", RED);
+                    startRetrying(false);
+                }
+            }, wait);
         }
 
         function reportSuccess(result) {
             clearPending();
             stopRetrying();
+            retryButton.hidden = true;
+            attempt = 0;
+            startedAt = 0;
             if (result.already_logged) {
                 // An identical message inside ten minutes is recorded against the
                 // request already in the queue. Saying so is more honest than
@@ -159,9 +212,10 @@
                     // this page could tell.
                     show("NOT SENT YET — saved on this phone. It will keep trying by itself. "
                         + "Stay on this page, and move closer to the network if you can.", RED);
-                    startRetrying();
+                    startRetrying(true);
                 } else {
                     clearPending();
+                    retryButton.hidden = true;
                     show("NOT SENT. " + (error.detail ? error.detail + " " : "")
                         + "If this keeps failing, find a triage coordinator in person.", RED);
                 }
@@ -170,11 +224,28 @@
             }
         });
 
+        // Manual retry, for after the automatic attempts have stopped.
+        retryButton.addEventListener('click', function () {
+            if (!loadPending()) { retryButton.hidden = true; return; }
+            retryButton.hidden = true;
+            show("Trying again...", AMBER);
+            startRetrying(true);
+        });
+
+        // Picking the phone up is evidence the situation changed — they have moved,
+        // or come back to it. Reset the backoff and try promptly rather than
+        // waiting out a 60s delay while standing in signal.
+        document.addEventListener('visibilitychange', function () {
+            if (document.visibilityState !== 'visible') return;
+            if (!loadPending()) return;
+            if (retryTimer) startRetrying(true);
+        });
+
         // A request the phone carried out of range and back, or across a reload.
         (function resume() {
             if (!loadPending()) return;
             show("A request saved on this phone was never sent. Trying again now...", AMBER);
-            startRetrying();
+            startRetrying(true);
         })();
     </script>
 </body>
