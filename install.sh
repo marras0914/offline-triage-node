@@ -146,6 +146,17 @@ printf '  Read-only role `triage_ro` configured (cannot write, by grant).\n'
 # ---------------------------------------------------------------------------
 step 5 "Pulling the local model ($TRIAGE_MODEL)..."
 
+# `ollama list` prints tagged names, so a bare model name from the workflow
+# ("llama3.1") never appears literally in it — that row reads "llama3.1:latest".
+# Comparing the first column exactly, against both spellings, is what makes this
+# agree with reality. A prefix match is what broke it before: a bundle that had
+# restored perfectly was reported as not containing its own model.
+model_present() {
+  docker compose exec -T ollama ollama list 2>/dev/null \
+    | awk 'NR>1 {print $1}' \
+    | grep -qxF -e "$TRIAGE_MODEL" -e "$TRIAGE_MODEL:latest"
+}
+
 for _ in $(seq 1 30); do
   if docker compose exec -T ollama ollama list >/dev/null 2>&1; then
     break
@@ -153,21 +164,25 @@ for _ in $(seq 1 30); do
   sleep 2
 done
 
-if docker compose exec -T ollama ollama list 2>/dev/null | grep -q "^${TRIAGE_MODEL}[[:space:]]"; then
+if model_present; then
   printf '  Already present; nothing to fetch.\n'
 elif [ "$OFFLINE" = "1" ] && [ -f "$BUNDLE/ollama-models.tar.gz" ]; then
   # Ollama reads its blob directory at startup, so restoring the directory is
   # the whole import — there is no separate register step.
   printf '  Restoring the model from the offline bundle...\n'
+  # `tar -xf`, not `-xzf`: gunzip has already decompressed the stream, and asking
+  # tar to gunzip it again fails with "stdin: not in gzip format". This is what
+  # made the whole offline path unusable — the bundle built correctly and could
+  # never be restored, which no test caught until one actually installed from it.
   gunzip -c "$BUNDLE/ollama-models.tar.gz" \
-    | docker compose exec -T ollama tar -xzf - -C /root/.ollama \
+    | docker compose exec -T ollama tar -xf - -C /root/.ollama \
     || fail "could not restore the model from $BUNDLE/ollama-models.tar.gz"
   docker compose restart ollama >/dev/null
   for _ in $(seq 1 30); do
     docker compose exec -T ollama ollama list >/dev/null 2>&1 && break
     sleep 2
   done
-  docker compose exec -T ollama ollama list 2>/dev/null | grep -q "^${TRIAGE_MODEL}[[:space:]]" \
+  model_present \
     || fail "the bundle was restored but '$TRIAGE_MODEL' is not in it. Rebuild the bundle: scripts/make-offline-bundle.sh"
   printf '  Restored from bundle.\n'
 else
