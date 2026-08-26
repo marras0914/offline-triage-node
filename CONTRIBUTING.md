@@ -29,7 +29,17 @@ To start contributing, you will need a machine capable of running Docker and eno
 ## 🔄 Pull Request Process
 
 1. **Branching:** Create a new branch for your feature or bugfix (e.g., `feature/offline-maps` or `fix/n8n-routing-error`).
-2. **Testing:** Because this is emergency infrastructure, code reliability is paramount. Ensure your changes do not break the core offline webhook pipeline. 
+2. **Testing:** Because this is emergency infrastructure, code reliability is paramount. Run the suites covering what you touched, and put the results in the PR:
+
+   | If you changed | Run |
+   | --- | --- |
+   | `install.sh` or `scripts/make-offline-bundle.sh` | `./test-install.sh` |
+   | anything in `db/init/` | `./db/test-schema.sh` |
+   | `html/index.html` | `node html/test-portal.mjs` |
+   | the workflow prompt, or `DEFAULT_MODEL` | `./eval/run-eval.sh` — before **and** after, both results in the PR |
+   | `mcp/server.mjs` or `mcp/agent.mjs` | `./eval/run-agent-eval.sh` |
+
+   The first three need no network and no running stack; see [Verifying your clone](README.md#verifying-your-clone). Whatever else you change, do not break the core offline webhook pipeline.
 3. **Documentation:** If you add a new service to the `docker-compose.yml` or change the network architecture, update the `ARCHITECTURE.md` file accordingly.
 4. **Submission:** Open a PR against the `main` branch. Provide a clear summary of the problem you are solving and how you tested it locally.
 

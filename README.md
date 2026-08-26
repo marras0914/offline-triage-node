@@ -8,6 +8,45 @@ When centralized infrastructure fails during a disaster, local communities lose 
 ## The Solution
 A portable, battery-backed edge computing node that broadcasts a local Wi-Fi mesh. Users connect, are forced to a captive portal, and submit SOS requests. A local LLM processes the unstructured requests, categorizes them by severity, and routes them to offline databases and local medic dashboards.
 
+## Quick start
+
+Needs Docker Engine and the Compose v2 plugin, and a connection for this first install. For an install with no connection at all, stage a bundle first — [DEPLOYMENT.md §2](DEPLOYMENT.md#2-installing-with-no-internet).
+
+```bash
+git clone https://github.com/marras0914/offline-triage-node.git
+cd offline-triage-node
+./install.sh
+```
+
+The installer asks for the node's static IP, then boots the stack, applies the schema, provisions the model, imports and activates the triage workflow, and smoke tests portal → n8n → Ollama → Postgres before it exits. It is safe to re-run: an existing `.env` is preserved, so secrets are never rotated out from under a live database.
+
+When it finishes:
+
+| | |
+| --- | --- |
+| Portal | `http://<node-ip>/` — what a survivor sees, port 80 only |
+| Dashboard | `http://<node-ip>:8080/` — NocoDB, for triage coordinators |
+| n8n hub | `http://<node-ip>:5678/` — operators |
+| Alarm screen | `http://<node-ip>:8081/` — leave open on a display, then click Arm |
+
+Two things the installer cannot do for you: attach the `triage` database as a NocoDB data source ([§5](DEPLOYMENT.md#5-post-install-attach-the-triage-data-to-nocodb)), and configure the router's walled garden ([§6](DEPLOYMENT.md#6-router--walled-garden)). Start the queue alarm with `./scripts/watch-queue.sh`. Full guide: **[DEPLOYMENT.md](DEPLOYMENT.md)**.
+
+## Verifying your clone
+
+Three of these need neither the stack running nor a network, so they are worth running before you trust anything else. `test-schema.sh` needs Docker; the other two need nothing.
+
+```bash
+./test-install.sh          # 11 assertions on the offline install path
+./db/test-schema.sh        # 31 schema assertions on a throwaway Postgres
+node html/test-portal.mjs  # 17 portal offline-behaviour tests
+```
+
+The triage quality suite needs a node that is already up with a model loaded, and is the gate for any prompt or model change — see [eval/README.md](eval/README.md):
+
+```bash
+./eval/run-eval.sh         # 53 cases, 100% recall required on Critical
+```
+
 ## Status
 
 Pre-field-test. The software is essentially complete and tested; **nothing has been validated on deployed hardware or a real handset.** See the [roadmap board](https://github.com/users/marras0914/projects/2).
