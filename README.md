@@ -111,6 +111,8 @@ Three things fall out of this, and the first was a surprise:
 
 **Do not go below 3B.** 1B satisfies the JSON schema contract perfectly and fails at the actual job, marking everything Critical. A queue where every row is top priority is a queue you must read end to end, which is the thing this system exists to avoid. 3B is a genuine fallback: it passes every gate, at 6.2s, and it only does so because the [deterministic severity floor](ARCHITECTURE.md#deterministic-backstops) catches what a smaller model misses. The backstops are what make weak hardware viable.
 
+Those figures are model time, from the eval. A whole submission costs more: measured end to end through nginx, n8n, Ollama and Postgres on the laptop, 12.8-27.0s warm against 12.0s of model time. And the first submission after the model has been evicted from RAM cost 95-101s twice over, which is why the node now pins it resident (`OLLAMA_KEEP_ALIVE=-1`) instead of reloading 5.6GB at the worst possible moment.
+
 Throughput is the real limit, not latency. Ollama serialises requests, so at ~14s each a single node handles roughly four submissions a minute before a queue forms; the concurrency caps in `nginx/default.conf` shed load rather than letting fifty people each wait behind it. **That ceiling — not speed — is the argument for the prepositioned build's iGPU.**
 
 ### The no-AI tier is real, not a consolation prize
@@ -172,7 +174,7 @@ Also in this phase, from review rather than the original plan:
 - [x] [Pin all image tags](https://github.com/marras0914/offline-triage-node/issues/17) — all six pinned to exact patch versions, each verified rather than assumed. A stale `ollama:latest` at 0.19.0 had been sitting in a local cache while 0.32.15 was current, so earlier benchmarks ran against a version nobody had chosen
 - [x] [Offline bootstrap](https://github.com/marras0914/offline-triage-node/issues/21) — `scripts/make-offline-bundle.sh` stages every image and the model (~12.7GB, so a 32GB stick); `install.sh` loads from it without touching the network. Run end to end with no network on 2026-08-27: images loaded from the bundle, the model restored from media, a live submission classified by it. Four bugs found in the attempt, all fixed and covered by `./test-install.sh` ([write-up](docs/the-install-that-could-never-work.md))
 - [x] [Coordinator runbook](https://github.com/marras0914/offline-triage-node/issues/18) — [OPERATIONS.md](OPERATIONS.md), plus the `review_pile` / `queue_health` views and an audit trail so "nobody looked" is visible rather than silent
-- [x] [Rate limiting](https://github.com/marras0914/offline-triage-node/issues/19) — per-device and global caps in nginx, and a shed request is told so in readable JSON. The numbers are still guesses pending measured load
+- [x] [Rate limiting](https://github.com/marras0914/offline-triage-node/issues/19) — per-device and global caps in nginx, and a shed request is told so in readable JSON. Measured 2026-08-27 rather than guessed: 12 concurrent submissions from one device yield 2 accepted and 10 rejected in ~16ms, and 10 concurrent from 5 devices yield exactly 8 accepted. The global cap of 8 is now derived from the model timeout divided by measured service time rather than picked
 
 ### Phase 2 — Network Isolation & Captive Portal
 

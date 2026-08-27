@@ -59,6 +59,14 @@ services:
     restart: unless-stopped
     # Deliberately not published to the host: the model is reachable only over
     # internal Docker DNS, so nothing on the open guest VLAN can drive it.
+
+    # Keep the model resident. Ollama evicts it after 5 minutes idle by default,
+    # and reloading 5.6GB from disk cost a measured 95s on the first submission
+    # after a quiet spell — a node sits idle precisely until someone needs it, so
+    # the default guarantees the worst latency at the worst moment. A box whose
+    # only job is this model should hold it.
+    environment:
+      - OLLAMA_KEEP_ALIVE=-1
     volumes:
       - ollama_data:/root/.ollama
     networks:
