@@ -76,7 +76,7 @@ Two things to know:
 *   **Rebuild it when the pinned versions change.** A bundle with a stale image set is a bundle that fails on the day it is needed. This is a periodic chore and it needs an owner.
 *   **The Ollama image is 5GB because it ships CUDA and ROCm libraries.** On the laptop path, where Docker gives Ollama no GPU access at all, that is dead weight on the media. Tracked in [#25](https://github.com/marras0914/offline-triage-node/issues/25).
 
-The air-gapped install has not yet been verified end to end — that test is [#21](https://github.com/marras0914/offline-triage-node/issues/21).
+The air-gapped install was verified end to end on 2026-08-27 ([#21](https://github.com/marras0914/offline-triage-node/issues/21)): a 12.7GB bundle on this repository, installed with no network, restoring the model from removable media and classifying a live submission with it. It failed four ways first, which is written up in [Four checks that could never fire](docs/the-install-that-could-never-work.md).
 
 ## 3. Prerequisites
 

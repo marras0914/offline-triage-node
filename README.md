@@ -61,7 +61,7 @@ What is verified, on developer machines rather than in a field:
 | Agent question answering | 10 questions, 0 fabricated ids, 7/8 facts ([eval/AGENT.md](eval/AGENT.md)) |
 | Hardware floor | a 2-core 2017 i5 runs 8B at 14s median, passing every gate |
 
-What is **not** verified: a clean boot on the target node, captive portal detection on any real phone, the air-gapped install, VLAN and mesh behaviour, and power draw. Those are Phases 1, 2 and 4 on the board, and no amount of further desk work substitutes for them.
+What is **not** verified: a clean boot on the target node, captive portal detection on any real phone, VLAN and mesh behaviour, and power draw. Those are Phases 1, 2 and 4 on the board, and no amount of further desk work substitutes for them.
 
 **This is not a substitute for emergency services.** Where any emergency number still answers, call it. This node is built for the hours when nothing answers — and its AI triage is a queue-ordering aid for human coordinators, never an authority on who gets help first. Requests the model cannot classify are escalated to Critical and flagged for a human rather than filed automatically.
 
@@ -135,7 +135,7 @@ A laptop is a battery-backed server with a screen and a keyboard attached, which
 
 Both are real gaps, tracked rather than glossed:
 
-1.  **You cannot download anything during a blackout** ([#21](https://github.com/marras0914/offline-triage-node/issues/21)). `scripts/make-offline-bundle.sh` now stages every image and the model onto removable media, and `install.sh` loads from it without touching the network — but that bundle still has to be built *beforehand*, on a machine that has a connection, and the air-gapped install has not yet been run end to end. Until it has, treat the offline path as written but unproven.
+1.  **You cannot download anything during a blackout** ([#21](https://github.com/marras0914/offline-triage-node/issues/21)). `scripts/make-offline-bundle.sh` now stages every image and the model onto removable media, and `install.sh` loads from it without touching the network — but that bundle still has to be built *beforehand*, on a machine that has a connection, and that bundle has to be rebuilt whenever a pinned version changes. The install itself is now proven: it was run end to end with no network on 2026-08-27, and the builder verifies a bundle is restorable before you carry it anywhere.
 2.  **A laptop hotspot still cannot serve a captive portal** ([#22](https://github.com/marras0914/offline-triage-node/issues/22)). The *router* half of this is now solved: `docker compose --profile captive-dns up -d` answers every hostname with the node, so a plain consumer router works — set its DHCP-advertised DNS to the node and detection fires. What remains is the laptop's own hotspot, where binding port 80 and controlling DNS both need privileges the OS does not hand out, and where client limits are typically around eight devices.
 
 ## Documentation
@@ -146,6 +146,11 @@ Both are real gaps, tracked rather than glossed:
 *   **[mcp/README.md](mcp/README.md)** — the read-only toolbelt for asking the queue questions
 *   **[eval/README.md](eval/README.md)** — the triage regression suite and what it does and does not prove
 *   **[CONTRIBUTING.md](CONTRIBUTING.md)** — where help is needed
+
+Longer reads:
+
+*   **[A triage node for the hours when nothing answers](docs/an-offline-triage-node.md)** — what this is, what the hardware really needs, and what is not true yet
+*   **[Four checks that could never fire](docs/the-install-that-could-never-work.md)** — the offline install failed four ways the first time it ran, and every one was the same mistake
 
 ## Roadmap
 
@@ -165,7 +170,7 @@ Partially verified already, on a dev box rather than target hardware: the schema
 Also in this phase, from review rather than the original plan:
 
 - [x] [Pin all image tags](https://github.com/marras0914/offline-triage-node/issues/17) — all six pinned to exact patch versions, each verified rather than assumed. A stale `ollama:latest` at 0.19.0 had been sitting in a local cache while 0.32.15 was current, so earlier benchmarks ran against a version nobody had chosen
-- [x] [Offline bootstrap](https://github.com/marras0914/offline-triage-node/issues/21) — `scripts/make-offline-bundle.sh` stages every image and the model (~12.7GB, so a 32GB stick); `install.sh` loads from it without touching the network. **The air-gapped install has not been run end to end** — the one claim here still unproven
+- [x] [Offline bootstrap](https://github.com/marras0914/offline-triage-node/issues/21) — `scripts/make-offline-bundle.sh` stages every image and the model (~12.7GB, so a 32GB stick); `install.sh` loads from it without touching the network. Run end to end with no network on 2026-08-27: images loaded from the bundle, the model restored from media, a live submission classified by it. Four bugs found in the attempt, all fixed and covered by `./test-install.sh` ([write-up](docs/the-install-that-could-never-work.md))
 - [x] [Coordinator runbook](https://github.com/marras0914/offline-triage-node/issues/18) — [OPERATIONS.md](OPERATIONS.md), plus the `review_pile` / `queue_health` views and an audit trail so "nobody looked" is visible rather than silent
 - [x] [Rate limiting](https://github.com/marras0914/offline-triage-node/issues/19) — per-device and global caps in nginx, and a shed request is told so in readable JSON. The numbers are still guesses pending measured load
 
