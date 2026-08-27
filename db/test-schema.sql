@@ -233,6 +233,54 @@ INSERT INTO results VALUES ('editing a note does not clutter the trail', (
     JOIN requests r ON r.id = e.request_id
     WHERE r.reporter_name = 'Fine' AND e.field = 'coordinator_notes'));
 
+-- =========================================================== coordinator boundary
+-- The dashboard was documented to connect as triage_admin, which owns all three
+-- databases: a coordinator could add n8n_primary as a second data source and
+-- read n8n's credential table. triage_coord exists so the boundary is a grant
+-- rather than a NocoDB setting. Asserted with the privilege functions so the
+-- whole file stays in one session.
+
+INSERT INTO results VALUES ('triage_coord can read the queue', (
+    SELECT has_table_privilege('triage_coord', 'requests', 'SELECT')
+       AND has_table_privilege('triage_coord', 'active_queue', 'SELECT')
+       AND has_table_privilege('triage_coord', 'review_pile', 'SELECT')));
+
+INSERT INTO results VALUES ('triage_coord can write the three fields a coordinator owns', (
+    SELECT has_column_privilege('triage_coord', 'requests', 'status', 'UPDATE')
+       AND has_column_privilege('triage_coord', 'requests', 'assigned_to', 'UPDATE')
+       AND has_column_privilege('triage_coord', 'requests', 'coordinator_notes', 'UPDATE')));
+
+-- The record of what arrived and what the model made of it is not the
+-- dashboard's to rewrite.
+INSERT INTO results VALUES ('triage_coord cannot rewrite the triage result or the raw message', (
+    SELECT NOT has_column_privilege('triage_coord', 'requests', 'severity', 'UPDATE')
+       AND NOT has_column_privilege('triage_coord', 'requests', 'raw_message', 'UPDATE')
+       AND NOT has_column_privilege('triage_coord', 'requests', 'summary', 'UPDATE')
+       AND NOT has_column_privilege('triage_coord', 'requests', 'triage_model', 'UPDATE')));
+
+INSERT INTO results VALUES ('triage_coord cannot create or destroy requests', (
+    SELECT NOT has_table_privilege('triage_coord', 'requests', 'INSERT')
+       AND NOT has_table_privilege('triage_coord', 'requests', 'DELETE')));
+
+-- The audit trail is written by a SECURITY DEFINER trigger, so no editing role
+-- needs to be able to touch it. If this grant ever appears, the trail becomes
+-- forgeable by the people it exists to record.
+INSERT INTO results VALUES ('triage_coord cannot read or write the audit trail directly', (
+    SELECT NOT has_table_privilege('triage_coord', 'request_events', 'SELECT')
+       AND NOT has_table_privilege('triage_coord', 'request_events', 'INSERT')
+       AND NOT has_table_privilege('triage_coord', 'request_events', 'UPDATE')
+       AND NOT has_table_privilege('triage_coord', 'request_events', 'DELETE')));
+
+INSERT INTO results VALUES ('the audit trigger runs as its owner, not as the editor', (
+    SELECT p.prosecdef FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public' AND p.proname = 'record_request_event'));
+
+-- The whole point of the role. n8n_primary holds n8n's encrypted credential
+-- table; the coordinator UI must not be able to open a session on it at all.
+INSERT INTO results VALUES ('neither scoped role can connect to n8n_primary', (
+    SELECT NOT has_database_privilege('triage_coord', 'n8n_primary', 'CONNECT')
+       AND NOT has_database_privilege('triage_ro',    'n8n_primary', 'CONNECT')));
+
 -- =========================================================== report
 \echo ''
 SELECT CASE WHEN ok THEN 'PASS' ELSE 'FAIL' END AS result, label FROM results ORDER BY ok, label;

@@ -317,7 +317,15 @@ CREATE INDEX IF NOT EXISTS request_events_request_idx ON request_events (request
 CREATE INDEX IF NOT EXISTS request_events_at_idx      ON request_events (at DESC);
 
 CREATE OR REPLACE FUNCTION record_request_event() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+-- SECURITY DEFINER so the audit write happens as this function owner rather
+-- than as whoever edited the row. Without it every role able to update a
+-- request also needs INSERT on request_events, which leaves the audit trail
+-- forgeable by exactly the people it exists to record. search_path is pinned
+-- because a SECURITY DEFINER function must never resolve names through the
+-- caller's path.
+SECURITY DEFINER SET search_path = public, pg_temp
+AS $$
 BEGIN
     IF NEW.status IS DISTINCT FROM OLD.status THEN
         INSERT INTO request_events (request_id, field, old_value, new_value, assigned_to)

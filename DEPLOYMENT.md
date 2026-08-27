@@ -13,7 +13,7 @@ offline-triage-node/
 │   │   ├── 01-databases.sql    # triage + nocodb_meta (first boot only)
 │   │   ├── 02-triage-schema.sql    # requests, views, dedupe + audit triggers
 │   │   └── 03-readonly-role.sql    # triage_ro, which cannot write
-│   ├── test-schema.sh          # 31 schema assertions on a throwaway Postgres
+│   ├── test-schema.sh          # 38 schema assertions on a throwaway Postgres
 │   └── test-schema.sql
 ├── nginx/
 │   └── default.conf            # portal :80, /api/sos proxy, rate limits, alarm :8081
@@ -117,9 +117,18 @@ Coordinators work the queue in NocoDB, which needs the `triage` database added o
 | Host     | `postgres`                       |
 | Port     | `5432`                           |
 | Database | `triage`                         |
-| Username | `triage_admin`                   |
-| Password | `POSTGRES_PASSWORD` from `.env`  |
+| Username | `triage_coord`                   |
+| Password | `TRIAGE_COORD_PASSWORD` from `.env` |
 | Schema   | `public`                         |
+
+**Use `triage_coord`, not `triage_admin`.** `triage_admin` owns all three databases, so a data
+source configured with it can also be pointed at `n8n_primary` and read n8n's credential table.
+`triage_coord` can connect to `triage` alone, reads the queue and its views, and writes exactly
+`status`, `assigned_to` and `coordinator_notes` — so the dashboard cannot rewrite a severity, a
+summary, or the words the person actually sent. Requests arrive through the portal only, and are
+closed rather than deleted, so it has no INSERT or DELETE either. The audit trail is written by a
+`SECURITY DEFINER` trigger, which is why editing a row does not require any privilege on
+`request_events`. Enforced by grant, and asserted in `db/test-schema.sh`.
 
 Two things worth doing immediately:
 

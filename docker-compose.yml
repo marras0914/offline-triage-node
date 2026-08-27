@@ -83,6 +83,9 @@ services:
       # Read by db/init/03-readonly-role.sql via psql's \getenv, to set the
       # password on the read-only role the MCP toolbelt uses.
       - TRIAGE_RO_PASSWORD=${TRIAGE_RO_PASSWORD:?set TRIAGE_RO_PASSWORD in .env}
+      # Read by db/init/04-coordinator-role.sql the same way, for the role the
+      # NocoDB dashboard connects as.
+      - TRIAGE_COORD_PASSWORD=${TRIAGE_COORD_PASSWORD:?set TRIAGE_COORD_PASSWORD in .env}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       # Creates the `triage` and `nocodb_meta` databases and the requests

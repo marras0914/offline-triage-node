@@ -29,12 +29,21 @@ printf 'Schema tests on %s\n\n' "$IMAGE"
 
 # Mounting db/init means the test exercises the real first-boot path, not a
 # hand-maintained copy of the schema.
+# TRIAGE_RO_PASSWORD and TRIAGE_COORD_PASSWORD are read by 03 and 04 through
+# psql getenv to set the role passwords. Without them those files cannot run,
+# and the test would silently cover less of the real first-boot path than it
+# appears to.
 docker run -d --name "$NAME" \
   -e POSTGRES_USER=triage_admin -e POSTGRES_PASSWORD=test -e POSTGRES_DB=n8n_primary \
+  -e TRIAGE_RO_PASSWORD=test -e TRIAGE_COORD_PASSWORD=test \
   -v "$(pwd -W 2>/dev/null || pwd)/db/init:/docker-entrypoint-initdb.d:ro" \
   "$IMAGE" >/dev/null || { echo "could not start $IMAGE"; exit 1; }
 
-for _ in $(seq 1 60); do
+# 240s, not 120s. First boot runs all four init scripts, including the full
+# schema, and then Postgres restarts before it accepts connections. On a busy
+# machine 120s tipped over into a false "never became ready", which reads as a
+# schema failure when nothing is wrong with the schema.
+for _ in $(seq 1 120); do
   docker exec "$NAME" pg_isready -U triage_admin -d triage >/dev/null 2>&1 && break
   sleep 2
 done

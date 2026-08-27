@@ -96,6 +96,7 @@ ensure_env N8N_ENCRYPTION_KEY "$(rand_hex)"
 # The read-only role the MCP toolbelt queries as. Separate from the admin
 # password so the agent's credential can be rotated on its own.
 ensure_env TRIAGE_RO_PASSWORD "$(rand_hex)"
+ensure_env TRIAGE_COORD_PASSWORD "$(rand_hex)"
 ensure_env GENERIC_TIMEZONE "America/Chicago"
 
 set -a
@@ -149,6 +150,13 @@ printf '  Schema applied to `triage`.\n'
 # environment, which compose populates from .env.
 psql_admin -d postgres < db/init/03-readonly-role.sql >/dev/null
 printf '  Read-only role `triage_ro` configured (cannot write, by grant).\n'
+
+# 04 is re-runnable for the same reason as 03: it reads TRIAGE_COORD_PASSWORD
+# from the postgres container's environment, so rotating the value in .env and
+# re-running is how the new password reaches the role.
+psql_admin -d postgres < db/init/04-coordinator-role.sql >/dev/null
+printf '  Coordinator role `triage_coord` configured (reads the queue, writes three fields).
+'
 
 # ---------------------------------------------------------------------------
 step 5 "Pulling the local model ($TRIAGE_MODEL)..."
