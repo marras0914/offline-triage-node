@@ -189,14 +189,28 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 6. Git Bash rewrites container-internal paths, which silently sent the step 5
-#    model restore to C:/Program Files/Git/root/.ollama.
+# 6. Git Bash rewrites container-internal paths. It silently sent the step 5
+#    model restore to C:/Program Files/Git/root/.ollama, and separately sent the
+#    eval harness to a module path that did not exist, so the suite exited
+#    without running a single case. Any script handing docker an absolute
+#    container path needs the guard — check all of them, not just whichever one
+#    broke most recently.
 printf '\nwindows path guard\n'
 
-if grep -q '^export MSYS_NO_PATHCONV=1' "$INSTALL_SH"; then
-  ok "install.sh guards against Git Bash path rewriting"
-else
-  bad "install.sh does not export MSYS_NO_PATHCONV; the step 5 restore lands nowhere on Windows"
+UNGUARDED=""
+CHECKED=0
+for f in $(find . -name '*.sh' -not -path './.git/*' | sort); do
+  grep -qE 'docker (compose )?(exec|run)[^|]*( |=)/[a-zA-Z]' "$f" || continue
+  CHECKED=$((CHECKED+1))
+  if grep -q '^export MSYS_NO_PATHCONV=1' "$f"; then
+    ok "${f#./} guards against Git Bash path rewriting"
+  else
+    bad "${f#./} hands docker an absolute container path with no MSYS_NO_PATHCONV"
+    UNGUARDED="$UNGUARDED ${f#./}"
+  fi
+done
+if [ "$CHECKED" -eq 0 ]; then
+  bad "found no scripts passing container paths to docker; the check has stopped checking"
 fi
 
 # ---------------------------------------------------------------------------

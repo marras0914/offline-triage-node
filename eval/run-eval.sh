@@ -14,4 +14,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Git Bash rewrites container-internal paths without this, so the path handed
+# to docker below arrives as C:/Program Files/Git/... inside the container and
+# nothing is found. A no-op on Linux, which is the target.
+export MSYS_NO_PATHCONV=1
+export MSYS2_ARG_CONV_EXCL='*'
+
 docker compose exec -T n8n node /eval/run-eval.mjs "$@"

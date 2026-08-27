@@ -28,7 +28,7 @@ What you are left with when the AI is gone is a networked intake form feeding a 
 
 This is also why the model is constrained by code rather than by prompting. Three examples, each of which started as a real failure:
 
-- **A severity floor.** Prompt injection in a message body could bury a Critical request. Asking the model more nicely did not fix it; a deterministic floor over the classification did, taking recall on Critical cases from 83.3% to 100%.
+- **A severity floor.** Prompt injection in a message body could bury a Critical request. Asking the model more nicely did not fix it; a deterministic floor over the classification did, taking recall on Critical cases from 83.3% to 100%. Worth stating plainly: the floor’s vocabulary was grown from those same cases, so the suite guards against losing that coverage rather than proving it generalises to language nobody has seen yet. Only real intake tests that.
 - **The summary is the person's own words.** Fed pure gibberish, the model once produced *"Unconscious person needs medical attention."* A message with almost no content cannot be summarised, so now it isn't — the stored summary is the raw text. Fabrications reaching a coordinator went from 3 to 0.
 - **Unclassifiable means Critical, flagged.** Anything the model cannot place is escalated for a human, not filed quietly.
 
@@ -59,7 +59,7 @@ This is the part that took the most work to make real, because the node's whole 
 
 `scripts/make-offline-bundle.sh` runs on a machine that *does* have a connection and stages everything onto removable media: all six pinned images in one archive, plus the model's Ollama data directory. About 12.7 GB uncompressed, so use a 32 GB stick — one too full to rebuild a bundle on is one that fails you in the field. On the target machine, `./install.sh` finds the bundle, loads from it, and never touches the network.
 
-The builder now reads both archives back before it finishes, checking that every pinned image is really inside and that the model's manifest is present under the exact name the installer will look it up by. That check exists because a bundle once built perfectly and could not be restored at all, which is [its own story](the-install-that-could-never-work.md).
+Triage quality survives the trip: the 53-case eval was re-run against a model restored from a bundle rather than pulled over the network, and every gate came out identical to the published baseline. The builder now reads both archives back before it finishes, checking that every pinned image is really inside and that the model's manifest is present under the exact name the installer will look it up by. That check exists because a bundle once built perfectly and could not be restored at all, which is [its own story](the-install-that-could-never-work.md).
 
 ## What is not true yet
 

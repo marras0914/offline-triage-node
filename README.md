@@ -36,7 +36,7 @@ Two things the installer cannot do for you: attach the `triage` database as a No
 Three of these need neither the stack running nor a network, so they are worth running before you trust anything else. `test-schema.sh` needs Docker; the other two need nothing.
 
 ```bash
-./test-install.sh          # 11 assertions on the offline install path
+./test-install.sh          # 24 assertions on the offline install path
 ./db/test-schema.sh        # 31 schema assertions on a throwaway Postgres
 node html/test-portal.mjs  # 17 portal offline-behaviour tests
 ```
@@ -55,7 +55,7 @@ What is verified, on developer machines rather than in a field:
 
 | | |
 | --- | --- |
-| Triage quality | 53 cases, `llama3.1:8b` passes every gate — 100% recall over 29 Critical, 0 under-escalation ([eval/](eval/)) |
+| Triage quality | 53 cases, `llama3.1:8b` passes every gate — 100% recall over 29 Critical, 0 under-escalation ([eval/](eval/)). Re-run 2026-08-27 against a model restored from an offline bundle rather than pulled: identical on every gate |
 | Schema behaviour | 31 assertions, including that a household's *worse* follow-up is never hidden ([db/test-schema.sh](db/test-schema.sh)) |
 | Portal offline behaviour | 17 tests — holds a request on the phone, never reports a false success ([html/test-portal.mjs](html/test-portal.mjs)) |
 | Agent question answering | 10 questions, 0 fabricated ids, 7/8 facts ([eval/AGENT.md](eval/AGENT.md)) |

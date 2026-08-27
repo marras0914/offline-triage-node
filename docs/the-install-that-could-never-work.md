@@ -111,7 +111,7 @@ Nothing did, for months, because running it means staging 12.7 GB and installing
 
 Fixing the bugs was the easy half. The useful half was making this class of thing fail loudly next time.
 
-**Tests that run the shipped code, not a copy of it.** The suite `sed`-extracts the actual functions out of `install.sh` and executes them against fixtures — real `ollama list` output for the presence check, a stubbed `curl` for the retry loop, a real fixture archive built the way the bundle builder builds one. A test holding its own copy of the logic passes while the shipped code rots. Run against the pre-fix installer, this suite fails exactly twice, once per bug; against the fixed one it passes 21 times.
+**Tests that run the shipped code, not a copy of it.** The suite `sed`-extracts the actual functions out of `install.sh` and executes them against fixtures — real `ollama list` output for the presence check, a stubbed `curl` for the retry loop, a real fixture archive built the way the bundle builder builds one. A test holding its own copy of the logic passes while the shipped code rots. Run against the pre-fix installer, this suite fails exactly twice, once per bug; against the fixed one it passes 24 times.
 
 **The builder verifies its own output.** It now reads both archives back before writing the manifest, confirming every pinned image is really inside and that the model's manifest exists under the exact name the installer will look it up by. A bundle that cannot be restored now fails on the machine that still has a connection to fix it. That is the whole trade: 90 seconds there, or a dead node in a blackout.
 
@@ -138,6 +138,34 @@ The installer was re-run against the same bundle, on the same machine, end to en
 Two things in that output are the point. `Already present; nothing to fetch` is bug 2 fixed in the direction nobody had ever seen work — the fast path firing for the first time. And `Webhook not registered yet; waiting for it...` means the race in bug 3 **happened again** on this run, and the retry absorbed it. The bug is still there, in the sense that n8n still reports healthy before it is ready. It just cannot cause a false failure any more.
 
 The air-gapped install now runs start to finish, restores a 4.5 GB model from removable media, classifies a live submission with it, cleans up after itself, and exits truthfully.
+
+## Postscript: a fifth one, within the hour
+
+Immediately after the above was written, a new question came up — does a model *restored from a bundle* triage as well as one pulled over the network? Nobody had checked. The eval harness answered by exiting without running a single case:
+
+```
+Error: Cannot find module '/home/node/C:/Program Files/Git/eval/run-eval.mjs'
+```
+
+Same family. `eval/run-eval.sh` hands `docker compose exec` an absolute container path, and Git Bash rewrites it into a host path that does not exist. The suite had been broken on Windows the entire time, unnoticed for precisely the reason the offline install was: nobody ran it there. `scripts/make-offline-bundle.sh` carried the same flaw latent — the 12.7 GB bundle had built successfully only because the guard happened to be exported by hand in that shell, not because the script was correct.
+
+Worse, the first report of that failed run said it had passed, because the surrounding task exited `0`. That `0` was a trailing `echo`, not the eval, which had exited `1`. Bug 4 again — a proxy for success that was true while the thing it stood for was false — one hour after being written up, by the person who wrote it up.
+
+The useful fix is not the two missing guards. It is that the check now audits *every* script for the pattern instead of whichever one broke most recently, and fails if it ever finds zero of them, so it cannot quietly stop checking:
+
+```
+windows path guard
+  ok    eval/run-agent-eval.sh guards against Git Bash path rewriting
+  ok    eval/run-eval.sh guards against Git Bash path rewriting
+  ok    install.sh guards against Git Bash path rewriting
+  ok    scripts/make-offline-bundle.sh guards against Git Bash path rewriting
+```
+
+And the answer to the original question, once it could be asked: a bundle-restored model is indistinguishable from a pulled one. All six gates pass, at the same numbers as the published baseline — 0 schema violations, 100% recall over 29 Critical cases, 0 under-escalation, 1.9% over-escalation against a 25% bar, 0 fabrications reaching a coordinator, 98.1% category accuracy.
+
+Two numbers inside that run are the argument for constraining a model with code rather than instructions. The deterministic severity floor raised **5** cases to Critical that the model itself had graded lower — without it, recall over Critical is not 100%. And the model invented details in **2 of 3** pure-noise cases, while fabrications reaching a coordinator stayed at **0**, because the summary a coordinator reads is the person's own words rather than the model's.
+
+The model is not trusted. That is the design, and it is measurable.
 
 ## What is still not true
 
