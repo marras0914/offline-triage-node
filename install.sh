@@ -11,6 +11,13 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
+# Git Bash rewrites container-internal paths without this: the `-C /root/.ollama`
+# handed to `docker compose exec` in step 5 becomes `C:/Program Files/Git/root/
+# .ollama`, and the model restore lands nowhere while appearing to succeed. A
+# no-op on Linux, which is the target; required by anyone testing on Windows.
+export MSYS_NO_PATHCONV=1
+export MSYS2_ARG_CONV_EXCL='*'
+
 STEPS=8
 step() { printf '\n[%s/%s] %s\n' "$1" "$STEPS" "$2"; }
 fail() { printf '\nError: %s\n' "$1" >&2; exit 1; }
@@ -285,13 +292,36 @@ done
 # ---------------------------------------------------------------------------
 step 8 "Smoke testing the full intake path..."
 
+# Distinguishes "intake proven" from "never proven". The banner at the end
+# depends on it, because a deploy script that reports success it did not verify
+# is worse than one that fails loudly.
+SMOKE_OK=0
+
 if command -v curl >/dev/null 2>&1; then
   SMOKE_BODY='{"name":"INSTALL SMOKE TEST","location":"install.sh","message":"Ignore: automated post-install check."}'
-  RESPONSE="$(curl -s --max-time 300 -X POST -H 'Content-Type: application/json' \
-    -d "$SMOKE_BODY" "http://localhost/api/sos" || true)"
+
+  # n8n answers /healthz before it has registered the production webhook, so the
+  # wait in step 7 is necessary but not sufficient — a single POST here races the
+  # restart and loses, and the portal returns "Cannot POST /webhook/sos-intake"
+  # for a node that is in fact working. Retrying makes the smoke test its own
+  # readiness gate. The loop continues only while the POST is failing, so at most
+  # one row is ever stored, and it is deleted below.
+  RESPONSE=""
+  for attempt in $(seq 1 30); do
+    RESPONSE="$(curl -s --max-time 300 -X POST -H 'Content-Type: application/json' \
+      -d "$SMOKE_BODY" "http://localhost/api/sos" || true)"
+    case "$RESPONSE" in
+      *received*) break ;;
+    esac
+    if [ "$attempt" -eq 1 ]; then
+      printf '  Webhook not registered yet; waiting for it...\n'
+    fi
+    sleep 3
+  done
 
   case "$RESPONSE" in
     *received*)
+      SMOKE_OK=1
       printf '  Portal -> n8n -> Ollama -> Postgres: OK  %s\n' "$RESPONSE"
 
       # A stored row is not the same as a working model: the pipeline stores the
@@ -318,15 +348,32 @@ if command -v curl >/dev/null 2>&1; then
       printf '  Test row removed.\n'
       ;;
     *)
-      printf '  Smoke test failed. Response: %s\n' "${RESPONSE:-<empty>}"
+      printf '  Smoke test failed after 30 attempts over ~90s.\n'
+      printf '  Response: %s\n' "${RESPONSE:-<empty>}"
       printf '  Check:  docker compose logs n8n  |  docker compose logs portal\n'
       ;;
   esac
 else
+  # No curl means unproven, not broken. Don't fail the install over a missing
+  # tool, but don't claim the intake path works either.
   printf '  curl not found; skipping. Submit the form manually to verify.\n'
+  SMOKE_OK=skipped
 fi
 
 # ---------------------------------------------------------------------------
+if [ "$SMOKE_OK" = "0" ]; then
+  printf '\n========================================================\n'
+  printf '  Deployment INCOMPLETE - intake never answered\n'
+  printf '========================================================\n'
+  printf '  All five containers are up, but the smoke test never got a response,\n'
+  printf '  so the intake path is unproven. Do not hand this node to a\n'
+  printf '  coordinator until it is.\n'
+  printf '\n  Check:  docker compose logs n8n  |  docker compose logs portal\n'
+  printf '  Then re-run ./install.sh — it is safe to re-run.\n'
+  printf '========================================================\n'
+  exit 1
+fi
+
 printf '\n========================================================\n'
 printf '  Deployment complete\n'
 printf '========================================================\n'
@@ -334,6 +381,10 @@ printf '  Portal:    http://%s/           (survivors, port 80 only)\n' "$NODE_IP
 printf '  n8n Hub:   http://%s:5678/      (operators)\n' "$NODE_IP"
 printf '  Dashboard: http://%s:8080/      (triage coordinators)\n' "$NODE_IP"
 printf '  Alarm:     http://%s:8081/      (leave open on a screen, then click Arm)\n' "$NODE_IP"
+if [ "$SMOKE_OK" = "skipped" ]; then
+  printf '\n  NOTE: the intake path was NOT smoke tested (no curl). Submit the\n'
+  printf '        form at the portal URL above before relying on this node.\n'
+fi
 printf '\n  Start the queue alarm now:  ./scripts/watch-queue.sh\n'
 printf '  Next: in NocoDB, add the `triage` Postgres database as a data source.\n'
 printf '  See DEPLOYMENT.md for the connection details and VLAN setup.\n'

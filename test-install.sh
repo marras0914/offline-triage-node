@@ -123,6 +123,83 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 4. Step 8 has to retry, not post once. n8n answers /healthz before it registers
+#    the production webhook, so a single POST races the restart in step 7 and
+#    reports a working node as broken — which is exactly what the first real
+#    air-gapped install did.
+printf '\nsmoke test retry\n'
+
+LOOP="$(sed -n '/^  RESPONSE=""$/,/^  done$/p' "$INSTALL_SH")"
+if [ -z "$LOOP" ]; then
+  bad "could not extract the smoke-test retry loop from $INSTALL_SH"
+else
+  # The loop captures curl in a command substitution, which is a subshell, so the
+  # call count has to live in a file to survive.
+  sleep() { :; }   # otherwise the give-up path takes 90 real seconds
+  SMOKE_BODY='{}'
+  CURL_SUCCEED_ON=0
+  curl() {
+    n=$(( $(cat "$WORK/calls") + 1 ))
+    echo "$n" > "$WORK/calls"
+    if [ "$CURL_SUCCEED_ON" -ne 0 ] && [ "$n" -ge "$CURL_SUCCEED_ON" ]; then
+      printf '{"status":"received","id":"1"}'
+    else
+      printf 'Cannot POST /webhook/sos-intake'
+    fi
+  }
+  calls() { cat "$WORK/calls"; }
+
+  echo 0 > "$WORK/calls"; CURL_SUCCEED_ON=1
+  eval "$LOOP"
+  check "a webhook ready immediately is posted to once" 1 "$(calls)"
+  case "$RESPONSE" in *received*) ok "...and is reported as success" ;; *) bad "a ready webhook was not reported as success" ;; esac
+
+  echo 0 > "$WORK/calls"; CURL_SUCCEED_ON=4
+  eval "$LOOP"
+  check "a webhook that registers late is waited for, not failed" 4 "$(calls)"
+  case "$RESPONSE" in *received*) ok "...and is still reported as success" ;; *) bad "a late webhook was reported as failure" ;; esac
+
+  echo 0 > "$WORK/calls"; CURL_SUCCEED_ON=0
+  eval "$LOOP"
+  check "a webhook that never answers is given up on" 30 "$(calls)"
+  case "$RESPONSE" in *received*) bad "success reported with no working webhook" ;; *) ok "...and is not reported as success" ;; esac
+
+  unset -f curl sleep calls
+fi
+
+# ---------------------------------------------------------------------------
+# 5. A deploy script that reports success it did not verify is worse than one
+#    that fails loudly. The first real air-gapped install printed "Deployment
+#    complete" and exited 0 with the intake path broken.
+printf '\nhonest exit status\n'
+
+GUARD="$(sed -n '/SMOKE_OK" = "0"/,/^fi$/p' "$INSTALL_SH")"
+case "$GUARD" in
+  *"exit 1"*) ok "a failed smoke test exits non-zero" ;;
+  *)          bad "nothing makes a failed smoke test exit non-zero" ;;
+esac
+case "$GUARD" in
+  *INCOMPLETE*) ok "...and says so instead of printing the success banner" ;;
+  *)            bad "the failure path does not distinguish itself from success" ;;
+esac
+if grep -q 'SMOKE_OK=1' "$INSTALL_SH"; then
+  ok "success is recorded only on a response, not assumed"
+else
+  bad "SMOKE_OK is never set on success"
+fi
+
+# ---------------------------------------------------------------------------
+# 6. Git Bash rewrites container-internal paths, which silently sent the step 5
+#    model restore to C:/Program Files/Git/root/.ollama.
+printf '\nwindows path guard\n'
+
+if grep -q '^export MSYS_NO_PATHCONV=1' "$INSTALL_SH"; then
+  ok "install.sh guards against Git Bash path rewriting"
+else
+  bad "install.sh does not export MSYS_NO_PATHCONV; the step 5 restore lands nowhere on Windows"
+fi
+
+# ---------------------------------------------------------------------------
 # 3. Both scripts must read the model name from the same place, or a bundle can
 #    be built for one model and verified against another.
 printf '\nmodel name source\n'
