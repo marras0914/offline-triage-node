@@ -121,6 +121,12 @@ Coordinators work the queue in NocoDB, which needs the `triage` database added o
 | Password | `TRIAGE_COORD_PASSWORD` from `.env` |
 | Schema   | `public`                         |
 
+> This step depends on `NC_ALLOW_LOCAL_EXTERNAL_DBS=true`, already set on the nocodb service in
+> `docker-compose.yml`. NocoDB blocks data sources on private network addresses by default, and
+> `postgres` here is reachable only over the internal Docker network — it is deliberately not
+> published to the host. Without that flag this step fails with `Connection to internal hosts is
+> not allowed`, whatever credentials you use. Do not remove it while tidying compose.
+
 **Use `triage_coord`, not `triage_admin`.** `triage_admin` owns all three databases, so a data
 source configured with it can also be pointed at `n8n_primary` and read n8n's credential table.
 `triage_coord` can connect to `triage` alone, reads the queue and its views, and writes exactly
