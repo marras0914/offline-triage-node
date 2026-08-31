@@ -38,7 +38,23 @@ NET="agenteval-net-$$"
 PG="agenteval-pg-$$"
 N8N="agenteval-n8n-$$"
 OLLAMA_OWNED=""
-RO_PW="agent_eval_ro"
+
+# Generated per run rather than written here. Every container below is on a
+# throwaway network, publishes no port, and is removed on exit, so these only have
+# to hold for the life of the eval — but a literal in the file is one a secret
+# scanner flags and a reader can mistake for a real credential. Same generator as
+# install.sh. PG_PW must reach both Postgres and n8n, and RO_PW both Postgres and
+# the credential JSON, so each is generated once and passed twice.
+rand_hex() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 32
+  else
+    head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'
+  fi
+}
+PG_PW="$(rand_hex)"
+RO_PW="$(rand_hex)"
+COORD_PW="$(rand_hex)"
 
 PG_IMAGE="$(awk '/^  postgres:/ {f=1} f && /image:/ {print $2; exit}' docker-compose.yml)"
 N8N_IMAGE="$(awk '/^  n8n:/ {f=1} f && /image:/ {print $2; exit}' docker-compose.yml)"
@@ -84,8 +100,8 @@ printf '  Ollama: %s\n' "$OLLAMA_ALIAS"
 [ -n "$N8N_IMAGE" ] || { echo "could not read the n8n image from docker-compose.yml" >&2; exit 1; }
 
 if ! docker run -d --name "$PG" --network "$NET" --network-alias postgres \
-       -e POSTGRES_USER=triage_admin -e POSTGRES_PASSWORD=test -e POSTGRES_DB=n8n_primary \
-       -e TRIAGE_RO_PASSWORD="$RO_PW" \
+       -e POSTGRES_USER=triage_admin -e POSTGRES_PASSWORD="$PG_PW" -e POSTGRES_DB=n8n_primary \
+       -e TRIAGE_RO_PASSWORD="$RO_PW" -e TRIAGE_COORD_PASSWORD="$COORD_PW" \
        -v "$(pwd -W 2>/dev/null || pwd)/db/init:/docker-entrypoint-initdb.d:ro" \
        "$PG_IMAGE" >/dev/null 2>"$CREDS_ERR"; then
   echo "could not start Postgres:" >&2; cat "$CREDS_ERR" >&2; exit 1
@@ -127,10 +143,10 @@ cat > "$CREDS/ro.json" <<JSON
 JSON
 
 docker run -d --name "$N8N" --network "$NET" --network-alias n8n \
-  -e N8N_ENCRYPTION_KEY=agent_eval_only \
+  -e N8N_ENCRYPTION_KEY="$(rand_hex)" \
   -e DB_TYPE=postgresdb -e DB_POSTGRESDB_HOST=postgres -e DB_POSTGRESDB_PORT=5432 \
   -e DB_POSTGRESDB_DATABASE=n8n_primary -e DB_POSTGRESDB_USER=triage_admin \
-  -e DB_POSTGRESDB_PASSWORD=test \
+  -e DB_POSTGRESDB_PASSWORD="$PG_PW" \
   -e N8N_DIAGNOSTICS_ENABLED=false -e GENERIC_TIMEZONE=UTC -e N8N_SECURE_COOKIE=false \
   -v "$(pwd -W 2>/dev/null || pwd)/n8n/workflows:/workflows:ro" \
   -v "$CREDS:/credentials:ro" \

@@ -22,6 +22,21 @@ if [ -z "$IMAGE" ]; then
 fi
 NAME="triage-schema-test-$$"
 
+# Generated per run rather than written here. The container publishes no port and
+# is removed on exit, so these only have to hold for the life of the test — but a
+# literal in the file is one a secret scanner flags and a reader can mistake for a
+# real credential. Same generator as install.sh, for the same reason it has one.
+rand_hex() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 32
+  else
+    head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'
+  fi
+}
+PG_PW="$(rand_hex)"
+RO_PW="$(rand_hex)"
+COORD_PW="$(rand_hex)"
+
 cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
@@ -34,8 +49,8 @@ printf 'Schema tests on %s\n\n' "$IMAGE"
 # and the test would silently cover less of the real first-boot path than it
 # appears to.
 docker run -d --name "$NAME" \
-  -e POSTGRES_USER=triage_admin -e POSTGRES_PASSWORD=test -e POSTGRES_DB=n8n_primary \
-  -e TRIAGE_RO_PASSWORD=test -e TRIAGE_COORD_PASSWORD=test \
+  -e POSTGRES_USER=triage_admin -e POSTGRES_PASSWORD="$PG_PW" -e POSTGRES_DB=n8n_primary \
+  -e TRIAGE_RO_PASSWORD="$RO_PW" -e TRIAGE_COORD_PASSWORD="$COORD_PW" \
   -v "$(pwd -W 2>/dev/null || pwd)/db/init:/docker-entrypoint-initdb.d:ro" \
   "$IMAGE" >/dev/null || { echo "could not start $IMAGE"; exit 1; }
 
