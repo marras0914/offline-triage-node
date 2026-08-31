@@ -68,7 +68,14 @@ cleanup() {
   # Disconnect a borrowed Ollama rather than leaving it attached to a dead network.
   [ -z "$OLLAMA_OWNED" ] && [ -n "${OLLAMA_ALIAS:-}" ] \
     && docker network disconnect "$NET" "$OLLAMA_ALIAS" >/dev/null 2>&1
-  docker network rm "$NET" >/dev/null 2>&1
+  # Retried, not fired once. docker rm -f returns before the endpoint is released,
+  # so a single network rm loses that race and leaves an empty network behind —
+  # one per run, invisible until Docker's default address pool is subnetted out
+  # and every later run fails at "docker network create" instead of here.
+  for _ in 1 2 3 4 5; do
+    docker network rm "$NET" >/dev/null 2>&1 && break
+    sleep 1
+  done
   rm -f "$CREDS_ERR"
 }
 trap cleanup EXIT
