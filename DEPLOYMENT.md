@@ -13,7 +13,7 @@ offline-triage-node/
 │   │   ├── 01-databases.sql    # triage + nocodb_meta (first boot only)
 │   │   ├── 02-triage-schema.sql    # requests, views, dedupe + audit triggers
 │   │   └── 03-readonly-role.sql    # triage_ro, which cannot write
-│   ├── test-schema.sh          # 38 schema assertions on a throwaway Postgres
+│   ├── test-schema.sh          # 39 schema assertions on a throwaway Postgres
 │   └── test-schema.sql
 ├── nginx/
 │   └── default.conf            # portal :80, /api/sos proxy, rate limits, alarm :8081
@@ -34,7 +34,7 @@ offline-triage-node/
 │   ├── server.mjs              # MCP server over stdio, zero dependencies
 │   └── agent.mjs               # the offline MCP client
 ├── eval/                       # see eval/README.md and eval/AGENT.md
-│   ├── golden-set.jsonl        # 53 triage cases
+│   ├── golden-set.jsonl        # 54 triage cases
 │   ├── run-eval.sh
 │   ├── agent-questions.jsonl   # 10 agent questions + fixture
 │   └── run-agent-eval.sh

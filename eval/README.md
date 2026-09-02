@@ -50,6 +50,7 @@ Defined in `BAR` at the top of `run-eval.mjs`.
 | over-escalation rate | ≤25% | keeps the tiers meaningful; see below |
 | fabrications | 0 | reaching a coordinator; see below |
 | category accuracy | 80% | wrong category misroutes to the wrong responder |
+| **storable** | **0** | a row Postgres cannot accept is a report that never arrives; see below |
 
 Severity **exact-match is reported but not gated**, because it counts
 Urgent-read-as-Critical the same as Urgent-read-as-Standard. Those are not the
@@ -76,6 +77,26 @@ human via `needs_review`.
 Critical is noise in a coordinator's queue. A Critical request read as Standard is
 someone waiting behind blankets. The bars are asymmetric on purpose: zero
 tolerance one way, a quarter of all traffic the other.
+
+## Storable
+
+This harness runs the real Code nodes and calls itself a measure of what lands in
+Postgres. The `storable` gate is there so that claim is checked rather than
+assumed: it asserts every text field bound for the database could actually be
+written to one.
+
+It exists because of a bug it would have caught. A NUL byte in a message body
+does not fail a column constraint — it corrupts the Postgres wire protocol, so
+the insert throws, the n8n execution ends in error, and the webhook answers with
+an empty HTTP 200. The portal refuses to read that as success, so nobody is
+falsely told help is coming, but the phone then retries the same poisoned bytes
+forever and the report never reaches a coordinator. The message in question read
+"my father is not breathing".
+
+Case `ctrl-01` carries a NUL for exactly this reason. Run against the workflow as
+it was before the fix, its severity and category still pass and only this gate
+fails — which is the point. Every other bar here scores the model's judgement;
+this one scores whether the answer can be stored at all.
 
 ## Fabrication check
 
@@ -136,6 +157,12 @@ Coverage includes chaotic all-caps panic, rambling multi-need messages, non-Engl
 intake, and prompt injection — intake is a public, unauthenticated endpoint, so
 `inject-*` cases check that instructions in the message body cannot override the
 rubric.
+
+`ctrl-01` is the odd one out: it carries a NUL byte, written in the file as the
+six-character escape `\u0000` so the case is readable and only becomes a real
+control character when the line is parsed. It is not there to test the model's
+judgement — every label on it passes either way — but to feed the `storable` gate
+a byte the database cannot hold.
 
 ## Results
 
