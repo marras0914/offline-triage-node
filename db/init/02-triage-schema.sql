@@ -302,6 +302,14 @@ FROM requests;
 -- the same for every coordinator working through NocoDB. It identifies the
 -- system, not the person. Attribution to a human depends on coordinators setting
 -- assigned_to, which is a discipline, not a guarantee.
+--
+-- session_user, NOT current_user. The rows here are written by a SECURITY DEFINER
+-- trigger, so inside it current_user is the function's owner — triage_admin —
+-- whoever actually made the edit. Measured: a coordinator changing a status
+-- through NocoDB was recorded as triage_admin, indistinguishable from the intake
+-- pipeline writing its own triage result. session_user is unaffected by SECURITY
+-- DEFINER and reports the role that opened the connection, which restores the one
+-- thing this column is for: telling the coordinator UI apart from the pipeline.
 CREATE TABLE IF NOT EXISTS request_events (
     id          BIGSERIAL PRIMARY KEY,
     request_id  BIGINT NOT NULL REFERENCES requests(id) ON DELETE CASCADE,
@@ -310,8 +318,14 @@ CREATE TABLE IF NOT EXISTS request_events (
     old_value   TEXT,
     new_value   TEXT,
     assigned_to TEXT,
-    db_user     TEXT NOT NULL DEFAULT current_user
+    db_user     TEXT NOT NULL DEFAULT session_user
 );
+
+-- Applied explicitly because the CREATE above is IF NOT EXISTS, which does not
+-- touch an existing table. Without this line a node installed before the fix
+-- keeps its old current_user default through every re-run of install.sh, and
+-- goes on attributing coordinator edits to triage_admin.
+ALTER TABLE request_events ALTER COLUMN db_user SET DEFAULT session_user;
 
 CREATE INDEX IF NOT EXISTS request_events_request_idx ON request_events (request_id, at);
 CREATE INDEX IF NOT EXISTS request_events_at_idx      ON request_events (at DESC);

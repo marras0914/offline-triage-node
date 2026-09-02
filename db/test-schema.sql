@@ -275,6 +275,17 @@ INSERT INTO results VALUES ('the audit trigger runs as its owner, not as the edi
     SELECT p.prosecdef FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
     WHERE n.nspname = 'public' AND p.proname = 'record_request_event'));
 
+-- ...which is exactly why db_user cannot default to current_user. Inside a
+-- SECURITY DEFINER function current_user is the owner, so every coordinator edit
+-- was recorded as triage_admin — measured, and indistinguishable from the intake
+-- pipeline writing its own result. session_user survives SECURITY DEFINER.
+-- Asserted on the definition rather than by editing as triage_coord, because
+-- SET ROLE would not help: it moves current_user and leaves session_user alone.
+INSERT INTO results VALUES ('the audit trail records the connecting role, not the trigger owner', (
+    SELECT upper(column_default) = 'SESSION_USER'
+    FROM information_schema.columns
+    WHERE table_name = 'request_events' AND column_name = 'db_user'));
+
 -- The whole point of the role. n8n_primary holds n8n's encrypted credential
 -- table; the coordinator UI must not be able to open a session on it at all.
 INSERT INTO results VALUES ('neither scoped role can connect to n8n_primary', (
