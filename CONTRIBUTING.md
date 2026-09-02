@@ -12,7 +12,7 @@ We are actively looking for contributions across four main domains:
 
 1. **AI & Prompt Engineering:** Refining the local LLM system prompts (Llama 3/Phi-3) to ensure strict JSON output and zero hallucinations when parsing chaotic, unstructured emergency messages. **Prompt changes must be gated by the eval suite** — run `./eval/run-eval.sh` before and after, and put both results in the PR. The suite loads the prompt out of the deployed workflow, so there is no second copy to keep in sync. See [eval/README.md](eval/README.md); the bar is asymmetric on purpose, with 100% recall required on Critical. Changes to the MCP agent or its tools are gated by [eval/AGENT.md](eval/AGENT.md) instead, which allows no fabricated request ids at all.
 2. **Workflow Automation (n8n):** Building out more robust edge cases for the n8n routing logic. How do we handle duplicate requests? How do we integrate LoRa mesh bridging via MQTT?
-3. **Frontend / Captive Portal:** Keeping the Nginx HTML/JS portal incredibly lightweight but adding offline-cached mapping (e.g., OpenStreetMap tiles) or multilingual support.
+3. **Frontend / Captive Portal:** Keeping the Nginx HTML/JS portal incredibly lightweight but adding offline-cached mapping (e.g., OpenStreetMap tiles) or [multilingual support](https://github.com/marras0914/offline-triage-node/issues/26) — the triage behind the form already reads Spanish, so the form is the part that lags.
 4. **Hardware & Networking:** Field-testing the Docker stack on different mini-PCs, optimizing UniFi/MikroTik mesh configurations, and documenting battery/solar power draw.
 
 ## 💻 Development Setup
