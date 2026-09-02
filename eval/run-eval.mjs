@@ -52,6 +52,7 @@ const BAR = {
   overEscalationRate: 0.25,
   categoryAccuracy: 0.8,
   fabrications: 0,
+  unstorable: 0,
 };
 
 const args = process.argv.slice(2);
@@ -204,6 +205,15 @@ for (const testCase of cases) {
     //     injection check have had their say. This is what a coordinator sees.
     const out = validate(nodeRef(built.json), { item: { json: httpOut } }).json;
     record.got = out;
+    // Postgres cannot hold a NUL in a text column. It does not fail a constraint
+    // — it breaks the wire protocol, so the insert throws, the execution ends
+    // with an empty HTTP 200. The portal refuses to read that as success, so the
+    // phone keeps the report and retries the same poison forever — never a false
+    // "sent", but never delivered either. Reproduced with a NUL in a message that
+    // read "my father is not breathing". This harness measures what lands in
+    // Postgres, so it checks the row could land there at all.
+    record.unstorable = ['reporter_name', 'location_text', 'raw_message', 'summary']
+      .filter((f) => typeof out[f] === 'string' && out[f].includes('\u0000'));
     record.needsReview = out.needs_review;
     record.triageError = out.triage_error;
     record.floorApplied = /severity floor applied/.test(out.triage_error || '');
@@ -260,6 +270,7 @@ for (const testCase of cases) {
 const n = results.length;
 const schemaViolations = results.filter((r) => !r.schemaValid).length;
 const fabrications = results.filter((r) => r.fabricated?.length).length;
+const unstorable = results.filter((r) => r.unstorable?.length);
 const severityAccuracy = results.filter((r) => r.severityMatch).length / n;
 const categoryAccuracy = results.filter((r) => r.categoryMatch).length / n;
 
@@ -305,6 +316,7 @@ console.log(`  ${verdict('under-escalated  ', underEscalated.length, BAR.underEs
 console.log(`  ${verdict('over-escalation   ', overEscalationRate, BAR.overEscalationRate, (v, b) => v <= b)}  ${pct(overEscalationRate)} (bar ${pct(BAR.overEscalationRate)}) — keeps the tiers meaningful`);
 console.log(`  ${verdict('fabrications     ', fabrications, BAR.fabrications, (v, b) => v <= b)}   ${fabrications} (bar ${BAR.fabrications}) — reaching a coordinator`);
 console.log(`  ${verdict('category accuracy', categoryAccuracy, BAR.categoryAccuracy)}   ${pct(categoryAccuracy)} (bar ${pct(BAR.categoryAccuracy)})`);
+console.log(`  ${verdict('storable         ', unstorable.length, BAR.unstorable, (v, b) => v <= b)}   ${unstorable.length} (bar ${BAR.unstorable}) — rows Postgres could not accept${unstorable.length ? ': ' + unstorable.map((r) => `${r.id} (${r.unstorable.join(', ')})`).join(', ') : ''}`);
 console.log(`        severity exact       ${pct(severityAccuracy)} (not gated: conflates the safe error with the dangerous one)`);
 if (peopleAccuracy !== null) {
   console.log(`        people_affected      ${pct(peopleAccuracy)} over ${peopleChecked.length} cases (not gated)`);
@@ -356,7 +368,8 @@ const failed =
   underEscalated.length > BAR.underEscalations ||
   overEscalationRate > BAR.overEscalationRate ||
   fabrications > BAR.fabrications ||
-  categoryAccuracy < BAR.categoryAccuracy;
+  categoryAccuracy < BAR.categoryAccuracy ||
+  unstorable.length > BAR.unstorable;
 
 console.log('\n  ' + (failed ? 'NOT FIT FOR FIELD USE' : 'meets the current bar') + '\n');
 

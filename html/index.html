@@ -9,8 +9,13 @@
         .header { background-color: #ef4444; color: white; padding: 20px; border-radius: 8px 8px 0 0; text-align: center; }
         .form-container { background: white; padding: 20px; border-radius: 0 0 8px 8px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }
         label { display: block; margin-bottom: 5px; font-weight: 600; }
-        input, textarea { width: 100%; padding: 10px; margin-bottom: 15px; border: 1px solid #d4d4d8; border-radius: 4px; box-sizing: border-box; }
-        button { width: 100%; background-color: #ef4444; color: white; border: none; padding: 12px; font-size: 16px; font-weight: bold; border-radius: 4px; cursor: pointer; }
+        /* font-size is not cosmetic here. iOS Safari zooms the page when a focused
+           control's text is under 16px, which shifts the form sideways under
+           someone typing one-handed, at night, in an emergency — and the zoom
+           persists after the field is left. min-height meets the 44px touch
+           target both platforms recommend; the default padding alone came to 42. */
+        input, textarea { width: 100%; padding: 10px; margin-bottom: 15px; border: 1px solid #d4d4d8; border-radius: 4px; box-sizing: border-box; font-size: 16px; min-height: 44px; }
+        button { width: 100%; background-color: #ef4444; color: white; border: none; padding: 12px; font-size: 16px; font-weight: bold; border-radius: 4px; cursor: pointer; min-height: 48px; }
         button:active { background-color: #dc2626; }
         button:disabled { background-color: #fca5a5; cursor: default; }
         .status { margin-top: 15px; text-align: center; font-weight: bold; }
